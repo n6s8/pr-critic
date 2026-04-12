@@ -1,0 +1,56 @@
+Clean Code — Maintainable Software Principles
+Source: Based on Clean Code by Robert C. Martin
+Category: design
+
+---
+SECTION: Meaningful Names
+Use intention-revealing names. The name should say why it exists and what it does.
+BAD: d = 0  # elapsed time
+GOOD: elapsed_time_days = 0
+Use pronounceable, searchable names.
+Classes: noun phrases. Methods: verb phrases.
+
+---
+SECTION: Functions
+Functions should do one thing only. If it needs a comment to explain what, refactor it.
+Keep functions under ~20 lines.
+Maximum 3 parameters. More parameters suggest a design problem.
+Do not use flag arguments — they indicate the function does two things.
+BAD: def process_and_return(data)
+GOOD: def process(data) / def get_result()
+DRY: Do Not Repeat Yourself. Duplication is the root of maintenance problems.
+
+---
+SECTION: Comments
+Comments explain WHY, not WHAT. The code shows what.
+BAD: i += 1  # increment i
+GOOD: retry_count += 1  # allow one retry before failing permanently
+Never leave commented-out code in production. Delete it.
+Docstrings are required on all public modules, classes, and functions.
+
+---
+SECTION: Error Handling
+Use exceptions, not return codes, for error conditions.
+Never swallow exceptions silently.
+BAD: try: ... except: pass
+GOOD: try: ... except ValueError as e: logger.error(e); raise
+Provide context: include the operation that failed.
+
+---
+SECTION: Code Smells
+Long Method: function with too many lines of code.
+Dead Code: code that is never executed. Delete it.
+Magic Numbers: unexplained numeric literals.
+BAD: if retries > 3:
+GOOD: MAX_RETRIES = 3; if retries > MAX_RETRIES:
+Duplicate Code: same structure in multiple places.
+Mutable Default Arguments: see PEP 8.
+
+---
+SECTION: Python Best Practices
+Use list comprehensions instead of for-loops that build lists.
+BAD: result = []; for x in data: result.append(x*2)
+GOOD: result = [x*2 for x in data]
+Use context managers for files and connections.
+Use enumerate() instead of range(len()).
+Use dataclasses or Pydantic for structured data instead of plain dicts.

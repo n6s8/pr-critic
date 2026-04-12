@@ -1,0 +1,88 @@
+Annotated Code Review Examples
+Purpose: Few-shot examples for retrieval
+Category: examples
+
+---
+SECTION: SQL Injection
+Diff:
++def get_user(user_id):
++    query = f"SELECT * FROM users WHERE id = {user_id}"
++    return db.execute(query)
+
+Good Review:
+CRITICAL (Security — A03): SQL injection on line 2. user_id is interpolated directly into the query. An attacker can pass "1 OR 1=1" to dump all rows, or "1; DROP TABLE users" to destroy data.
+Fix: cursor.execute("SELECT * FROM users WHERE id = ?", (user_id,))
+Reference: OWASP A03 Injection
+
+---
+SECTION: Hardcoded Secret
+Diff:
++API_KEY = "sk-1234567890abcdef1234567890abcdef"
++headers = {"Authorization": f"Bearer {API_KEY}"}
+
+Good Review:
+CRITICAL (Security — A07): Hardcoded API key on line 1. This will be committed to git history and may be exposed publicly. Rotate this key immediately.
+Fix: API_KEY = os.environ.get("API_KEY") and add to .env (gitignored).
+Reference: OWASP A07
+
+---
+SECTION: MD5 Password Hashing
+Diff:
++if user.password == hashlib.md5(password.encode()).hexdigest():
+
+Good Review:
+CRITICAL (Security — A02): MD5 is a broken hash function easily reversed with rainbow tables.
+Fix: Use bcrypt.checkpw(password.encode(), user.password_hash)
+Reference: OWASP A02 Cryptographic Failures
+
+---
+SECTION: Bare Exception
+Diff:
++try:
++    process_data(item)
++except:
++    pass
+
+Good Review:
+MAJOR (Reliability): Bare except catches SystemExit, KeyboardInterrupt, and all errors silently. Debugging becomes impossible.
+Fix: except Exception as e: logger.error("Processing failed: %s", e); raise
+Reference: PEP 8 Exception Handling
+
+---
+SECTION: Clean Refactor Positive Example
+Diff:
+-def p(d):
+-    r = []
+-    for i in range(len(d)):
+-        if d[i] != None:
+-            r.append(d[i] * 2)
+-    return r
++def double_non_null(data: list[int | None]) -> list[int]:
++    return [x * 2 for x in data if x is not None]
+
+Good Review:
+Excellent refactor. Rename from p/d/r to descriptive names eliminates ambiguity. Type annotations make the contract explicit. List comprehension is idiomatic. `is not None` is correct per PEP 8.
+VERDICT: APPROVE
+
+---
+SECTION: OS Command Injection
+Diff:
++def ping_host(hostname):
++    os.system(f"ping -c 1 {hostname}")
+
+Good Review:
+CRITICAL (Security — A03): OS command injection. If hostname contains semicolons or pipes, the shell executes arbitrary commands.
+Fix: subprocess.run(["ping", "-c", "1", hostname], check=True)
+Reference: OWASP A03 Injection
+
+---
+SECTION: Mutable Default Argument
+Diff:
++def add_item(item, collection=[]):
++    collection.append(item)
++    return collection
+
+Good Review:
+MAJOR (Bug): Mutable default argument. The list is created once at definition time and shared across all calls. add_item("a") then add_item("b") returns ["a", "b"] on the second call.
+Fix: def add_item(item, collection=None): if collection is None: collection = []
+Reference: PEP 8 Mutable Default Arguments

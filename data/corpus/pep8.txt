@@ -1,0 +1,66 @@
+PEP 8 — Style Guide for Python Code
+Source: https://peps.python.org/pep-0008/
+Category: style
+
+---
+SECTION: Indentation
+Use 4 spaces per indentation level. Never use tabs.
+Continuation lines should align wrapped elements vertically.
+
+---
+SECTION: Maximum Line Length
+Limit all lines to a maximum of 79 characters.
+For docstrings and comments, limit to 72 characters.
+
+---
+SECTION: Naming Conventions
+Use snake_case for functions and variables: my_function, my_variable.
+Use PascalCase for class names: MyClass.
+Use UPPER_CASE for constants: MAX_VALUE.
+Never use l, O, or I as single-character variable names.
+
+---
+SECTION: Imports
+Put imports at the top of the file. One import per line.
+Order: stdlib, third-party, local. Blank line between groups.
+Avoid wildcard imports: from module import *
+
+---
+SECTION: Whitespace
+Avoid extraneous whitespace inside brackets.
+Surround binary operators with a single space on each side.
+No trailing whitespace.
+
+---
+SECTION: Comments
+Write complete sentences. Capitalize first word.
+Inline comments start with # and a single space.
+Write docstrings for all public modules, functions, classes, and methods.
+
+---
+SECTION: Exception Handling
+Always specify exception types. Never use bare except.
+BAD: except:
+GOOD: except ValueError:
+Use `except Exception as e` at minimum. Log the error.
+
+---
+SECTION: Comparisons
+Use `is` or `is not` for None comparisons, never ==.
+BAD: if x == None
+GOOD: if x is None
+Do not compare booleans with == True or == False.
+BAD: if flag == True
+GOOD: if flag
+
+---
+SECTION: Mutable Default Arguments
+Never use mutable objects as default argument values.
+BAD: def f(x=[]):
+GOOD: def f(x=None): if x is None: x = []
+
+---
+SECTION: Type Annotations
+Annotate public function parameters and return types.
+Use built-in generics: list[int], dict[str, Any].
+Use X | None instead of Optional[X] (Python 3.10+).

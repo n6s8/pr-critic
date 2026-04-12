@@ -1,0 +1,58 @@
+OWASP Top 10 Web Application Security Risks 2021
+Source: https://owasp.org/Top10/
+Category: security
+
+---
+SECTION: A01 Broken Access Control
+Always verify the authenticated user owns or has permission for the requested resource.
+Deny access by default.
+BAD: user = db.get(request.args['user_id'])
+GOOD: user = db.get(current_user.id)
+
+---
+SECTION: A02 Cryptographic Failures
+Never use MD5 or SHA1 for passwords — they are broken.
+Use bcrypt, scrypt, or Argon2 with appropriate work factors.
+Never hardcode cryptographic keys or secrets.
+Always use HTTPS for data in transit.
+BAD: hashlib.md5(password.encode()).hexdigest()
+GOOD: bcrypt.hashpw(password.encode(), bcrypt.gensalt())
+
+---
+SECTION: A03 Injection
+Never concatenate user input into SQL strings.
+BAD: query = f"SELECT * FROM users WHERE id = {user_id}"
+GOOD: cursor.execute("SELECT * FROM users WHERE id = ?", (user_id,))
+Never pass user input to shell commands unsanitized.
+BAD: os.system(f"ping {hostname}")
+GOOD: subprocess.run(["ping", hostname], check=True)
+
+---
+SECTION: A04 Insecure Design
+Validate all input at the boundary.
+Implement rate limiting on sensitive operations.
+Apply principle of least privilege.
+
+---
+SECTION: A05 Security Misconfiguration
+Never expose stack traces or internal paths to users.
+Change all default credentials.
+Remove unused features, files, and documentation.
+
+---
+SECTION: A07 Identification and Authentication Failures
+Never hardcode credentials or API keys in source code.
+BAD: API_KEY = "sk-1234567890abcdef"
+GOOD: API_KEY = os.environ.get("API_KEY")
+Use secure session management. Do not expose tokens in URLs.
+
+---
+SECTION: A08 Software and Data Integrity Failures
+Never deserialize untrusted data with pickle.
+BAD: data = pickle.loads(user_supplied_bytes)
+GOOD: data = json.loads(user_supplied_string)
+
+---
+SECTION: A09 Security Logging
+Log authentication events, failures, and access control violations.
+Never log passwords, tokens, credit card numbers, or PII.
