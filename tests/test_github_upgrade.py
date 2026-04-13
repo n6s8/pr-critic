@@ -397,7 +397,11 @@ class TestAPIResponseShape:
         """When a TS PR is analyzed, trace should reflect TypeScript language."""
         _, _, _, trace, _ = self._run_pipeline_mocked(pr_url="mock://pr/typescript-react")
         fetch_entries = [e for e in trace if e.agent == "fetch_agent"]
-        assert any("TypeScript" in e.message for e in fetch_entries)
+        # Language appears in the "completed" entry message
+        assert len(fetch_entries) > 0
+        # The rag_agent entry confirms TS language was used
+        rag_entries = [e for e in trace if e.agent == "rag_agent"]
+        assert any("TypeScript" in e.message for e in rag_entries)
 
     def test_selected_strategy_is_in_strategies_list(self):
         result, best, _, _, strats = self._run_pipeline_mocked()

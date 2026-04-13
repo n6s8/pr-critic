@@ -1,155 +1,119 @@
+import { memo, useMemo } from 'react'
 import type { Strategy } from '../types'
+import { getStrategyDisplayName } from '../lib/utils'
 
-interface SingleProps {
-  strategy: Strategy
-  review: string
-}
-
-function SingleReview({ strategy, review }: SingleProps) {
-  const name = strategy?.name ?? 'Unknown'
-
-  return (
-    <div className="flex flex-col h-full">
-      <div className="flex items-center gap-2 px-4 py-3 border-b border-border flex-shrink-0">
-        <span className="section-label">Review</span>
-        <span className="text-[10px] font-medium tracking-wider text-[#999] bg-card border border-border2 px-2 py-0.5 rounded uppercase">
-          {name}
-        </span>
-      </div>
-
-      <div className="flex-1 overflow-y-auto px-4 py-4">
-        <div className="text-[13px] leading-7 text-neutral-400 whitespace-pre-wrap">
-          {review ?? ''}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-interface CompareProps {
-  strategies: Strategy[] | undefined
-  reviews: Record<string, string>
-  onClear: () => void
-}
-
-function CompareReview({ strategies, reviews, onClear }: CompareProps) {
-  const safeStrategies = strategies ?? []
-
-  if (safeStrategies.length === 0) return null
-
-  return (
-    <div className="flex flex-col h-full">
-      <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border bg-blue-950/20 flex-shrink-0">
-        <span className="text-[12px] text-blue-400">
-          Comparing {safeStrategies.length} strategies
-        </span>
-
-        <button
-          onClick={onClear}
-          className="ml-auto text-[11px] text-blue-500 border border-blue-800/50 px-2 py-0.5 rounded hover:bg-blue-950/40 transition-colors"
-        >
-          Exit compare
-        </button>
-      </div>
-
-      <div
-        className="flex-1 overflow-hidden grid"
-        style={{ gridTemplateColumns: `repeat(${safeStrategies.length}, 1fr)` }}
-      >
-        {safeStrategies.map((s, i) => {
-          const id = s?.id ?? `s-${i}`
-          const name = s?.name ?? 'Unknown'
-          const score = s?.score ?? 0
-          const description = s?.description ?? ''
-
-          return (
-            <div
-              key={id}
-              className={`flex flex-col overflow-hidden${i < safeStrategies.length - 1 ? ' border-r border-border' : ''}`}
-            >
-              <div className="flex items-center justify-between px-3 py-2 border-b border-border bg-elevated flex-shrink-0">
-                <span className="text-[11px] text-neutral-400 font-medium">
-                  {name}
-                </span>
-                <span className="text-[11px] font-mono text-[#666]">
-                  {score.toFixed(2)}
-                </span>
-              </div>
-
-              <div className="flex-1 overflow-y-auto px-3 py-3">
-                <div className="text-[12px] leading-7 text-neutral-400 whitespace-pre-wrap">
-                  {reviews[id] ?? '—'}
-                </div>
-              </div>
-            </div>
-          )
-        })}
-      </div>
-    </div>
-  )
+interface ReviewSection {
+  title: string
+  body: string
 }
 
 interface Props {
-  strategies: Strategy[] | undefined
-  activeId: string
-  compareIds: string[] | undefined
+  strategy: Strategy | null
   review: string
-  onClearCompare: () => void
 }
 
-export function ReviewPanel({
-  strategies,
-  activeId,
-  compareIds,
-  review,
-  onClearCompare,
-}: Props) {
-  const safeStrategies = strategies ?? []
-  const safeCompareIds = compareIds ?? []
+function parseSections(review: string): ReviewSection[] {
+  const normalized = review.replace(/\r\n/g, '\n').trim()
+  if (!normalized) return []
 
-  const activeStrategy =
-    safeStrategies.find(s => s?.id === activeId) ?? null
+  const chunks = normalized.split(/\n(?=##\s+)/g)
 
-  if (safeCompareIds.length > 0) {
-    const compareStrategies = safeCompareIds
-      .map(id => safeStrategies.find(s => s?.id === id))
-      .filter(Boolean) as Strategy[]
+  return chunks
+    .map(chunk => {
+      const trimmed = chunk.trim()
+      if (!trimmed) return null
 
-    const reviews: Record<string, string> = {}
+      if (!trimmed.startsWith('## ')) {
+        return { title: 'Review', body: trimmed }
+      }
 
-    compareStrategies.forEach((s, i) => {
-      const id = s?.id ?? `s-${i}`
-      const name = s?.name ?? 'Unknown'
-      const score = s?.score ?? 0
-      const description = s?.description ?? ''
+      const [heading, ...rest] = trimmed.split('\n')
 
-      reviews[id] =
-        id === activeId
-          ? review ?? ''
-          : `Review for "${name}" strategy.\n\nScore: ${score.toFixed(2)}\n\n${description}\n\n(Full review text available when this strategy is selected.)`
+      return {
+        title: heading.replace(/^##\s+/, '').trim(),
+        body: rest.join('\n').trim(),
+      }
     })
+    .filter(Boolean) as ReviewSection[]
+}
+
+function renderBody(body: string) {
+  const lines = body
+    .split('\n')
+    .map(line => line.trim())
+    .filter(Boolean)
+
+  return lines.map((line, index) => {
+    if (line.startsWith('- ')) {
+      return (
+        <div
+          key={`${line}-${index}`}
+          className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3"
+        >
+          <div className="flex gap-3">
+            <span className="mt-2 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-emerald-300" />
+            <p className="text-sm leading-7 text-slate-300">{line.slice(2)}</p>
+          </div>
+        </div>
+      )
+    }
 
     return (
-      <CompareReview
-        strategies={compareStrategies}
-        reviews={reviews}
-        onClear={onClearCompare}
-      />
+      <p key={`${line}-${index}`} className="text-sm leading-7 text-slate-300">
+        {line}
+      </p>
     )
-  }
+  })
+}
 
-  if (!activeStrategy) {
+function ReviewPanelComponent({ strategy, review }: Props) {
+  const sections = useMemo(() => parseSections(review), [review])
+
+  if (!strategy) {
     return (
-      <div className="flex items-center justify-center h-full text-[#444] text-sm">
-        Select a strategy
-      </div>
+      <section className="surface-panel rounded-3xl p-6">
+        <p className="text-sm text-slate-400">
+          Select a strategy to view the review.
+        </p>
+      </section>
     )
   }
 
   return (
-    <SingleReview
-      strategy={activeStrategy}
-      review={review ?? ''}
-    />
+    <section className="surface-panel rounded-3xl p-6">
+      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/10 pb-5">
+        <div>
+          <p className="section-label">Review</p>
+          <h2 className="mt-2 text-2xl font-semibold text-white">
+            {getStrategyDisplayName(strategy)}
+          </h2>
+          <p className="mt-2 text-sm text-slate-400">
+            Structured markdown-like review rendered from the backend response.
+          </p>
+        </div>
+
+        <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-xs text-slate-300">
+          Score {strategy.score.toFixed(1)}
+        </span>
+      </div>
+
+      {sections.length === 0 ? (
+        <p className="mt-6 text-sm text-slate-400">No review text returned.</p>
+      ) : (
+        <div className="mt-6 space-y-6">
+          {sections.map((section, index) => (
+            <article
+              key={`${section.title}-${index}`}
+              className="card-lift rounded-3xl border border-white/10 bg-black/12 p-5"
+            >
+              <h3 className="text-lg font-semibold text-white">{section.title}</h3>
+              <div className="mt-4 space-y-3">{renderBody(section.body)}</div>
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
   )
 }
+
+export const ReviewPanel = memo(ReviewPanelComponent)

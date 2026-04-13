@@ -1,27 +1,37 @@
-import { useState, useCallback } from 'react'
-import type { AnalyzeResponse, LogLevel, ReviewState } from '../types'
+import { useCallback, useState } from 'react'
 import { analyzeRP } from '../api/analyze'
+import type { AnalyzeResponse, LogLevel, ReviewState } from '../types'
+
+function getInitialExpandedAgents(data: AnalyzeResponse) {
+  const agents = [...new Set((data.trace ?? []).map(entry => entry.agent))]
+
+  return Object.fromEntries(
+    agents.map((agent, index) => [agent, index === agents.length - 1])
+  )
+}
 
 export function useReviewState() {
   const [state, setState] = useState<ReviewState>({
-    prUrl: 'https://github.com/acme/platform/pull/1847',
+    prUrl: '',
+    lastAnalyzedUrl: '',
     data: null,
     loading: false,
     error: null,
     activeStrategyId: '',
     compareStrategyIds: [],
     selectedPipelineAgent: null,
-    traceFilters: { INFO: true, WARN: true, ERROR: true, DEBUG: true },
+    traceFilters: { INFO: true, WARN: true, ERROR: true, DEBUG: true, SUCCESS: true },
     expandedAgents: {},
   })
 
   const setPrUrl = useCallback((url: string) => {
-    setState(s => ({ ...s, prUrl: url }))
+    setState(current => ({ ...current, prUrl: url }))
   }, [])
 
   const analyze = useCallback(async (url: string) => {
-    setState(s => ({
-      ...s,
+    setState(current => ({
+      ...current,
+      lastAnalyzedUrl: url,
       loading: true,
       error: null,
       data: null,
@@ -32,116 +42,110 @@ export function useReviewState() {
     }))
 
     try {
-      const data: AnalyzeResponse = await analyzeRP(url)
+      const data = await analyzeRP(url)
 
-      const agents = [...new Set((data.trace ?? []).map(t => t.agent))]
-      const initialExpanded = Object.fromEntries(
-        agents.map(a => [a, false])
-      )
-
-      setState(s => ({
-        ...s,
+      setState(current => ({
+        ...current,
         data,
         loading: false,
-
-        // ✅ FIX: используем новый контракт
         activeStrategyId:
-          data.activeStrategyId ||
-          data.strategies?.[0]?.id ||
+          data.selected_strategy ||
+          data.strategies[0]?.id ||
           '',
-
-        expandedAgents: initialExpanded,
+        expandedAgents: getInitialExpandedAgents(data),
       }))
-    } catch (err) {
-      setState(s => ({
-        ...s,
+    } catch (error) {
+      setState(current => ({
+        ...current,
         loading: false,
-        error: err instanceof Error ? err.message : 'Unknown error',
+        error: error instanceof Error ? error.message : 'Unable to analyze this PR.',
       }))
     }
   }, [])
 
   const setActiveStrategy = useCallback((id: string) => {
-    setState(s => ({ ...s, activeStrategyId: id }))
+    setState(current => ({ ...current, activeStrategyId: id }))
   }, [])
 
   const toggleCompare = useCallback((id: string) => {
-    setState(s => {
-      const prev = s.compareStrategyIds
-      if (prev.includes(id))
-        return { ...s, compareStrategyIds: prev.filter(x => x !== id) }
-      if (prev.length >= 2)
-        return { ...s, compareStrategyIds: [prev[1], id] }
-      return { ...s, compareStrategyIds: [...prev, id] }
+    setState(current => {
+      const previous = current.compareStrategyIds
+
+      if (previous.includes(id)) {
+        return {
+          ...current,
+          compareStrategyIds: previous.filter(value => value !== id),
+        }
+      }
+
+      if (previous.length >= 2) {
+        return {
+          ...current,
+          compareStrategyIds: [previous[1], id],
+        }
+      }
+
+      return {
+        ...current,
+        compareStrategyIds: [...previous, id],
+      }
     })
   }, [])
 
   const clearCompare = useCallback(() => {
-    setState(s => ({ ...s, compareStrategyIds: [] }))
+    setState(current => ({ ...current, compareStrategyIds: [] }))
   }, [])
 
   const selectPipelineAgent = useCallback((agent: string) => {
-    setState(s => {
-      const next = s.selectedPipelineAgent === agent ? null : agent
-
-      if (next !== null && s.data) {
-        const agents = [...new Set((s.data.trace ?? []).map(t => t.agent))]
-        const expanded = Object.fromEntries(
-          agents.map(a => [a, a === next])
-        )
-        return {
-          ...s,
-          selectedPipelineAgent: next,
-          expandedAgents: expanded,
-        }
-      }
-
-      return { ...s, selectedPipelineAgent: next }
-    })
+    setState(current => ({
+      ...current,
+      selectedPipelineAgent:
+        current.selectedPipelineAgent === agent ? null : agent,
+    }))
   }, [])
 
   const toggleTraceFilter = useCallback((level: LogLevel) => {
-    setState(s => ({
-      ...s,
+    setState(current => ({
+      ...current,
       traceFilters: {
-        ...s.traceFilters,
-        [level]: !s.traceFilters[level],
+        ...current.traceFilters,
+        [level]: !current.traceFilters[level],
       },
     }))
   }, [])
 
   const toggleAgent = useCallback((agent: string) => {
-    setState(s => ({
-      ...s,
+    setState(current => ({
+      ...current,
       expandedAgents: {
-        ...s.expandedAgents,
-        [agent]: !s.expandedAgents[agent],
+        ...current.expandedAgents,
+        [agent]: !current.expandedAgents[agent],
       },
     }))
   }, [])
 
   const expandAll = useCallback(() => {
-    setState(s => {
-      if (!s.data) return s
-      const agents = [...new Set((s.data.trace ?? []).map(t => t.agent))]
+    setState(current => {
+      if (!current.data) return current
+
+      const agents = [...new Set(current.data.trace.map(entry => entry.agent))]
+
       return {
-        ...s,
-        expandedAgents: Object.fromEntries(
-          agents.map(a => [a, true])
-        ),
+        ...current,
+        expandedAgents: Object.fromEntries(agents.map(agent => [agent, true])),
       }
     })
   }, [])
 
   const collapseAll = useCallback(() => {
-    setState(s => {
-      if (!s.data) return s
-      const agents = [...new Set((s.data.trace ?? []).map(t => t.agent))]
+    setState(current => {
+      if (!current.data) return current
+
+      const agents = [...new Set(current.data.trace.map(entry => entry.agent))]
+
       return {
-        ...s,
-        expandedAgents: Object.fromEntries(
-          agents.map(a => [a, false])
-        ),
+        ...current,
+        expandedAgents: Object.fromEntries(agents.map(agent => [agent, false])),
       }
     })
   }, [])

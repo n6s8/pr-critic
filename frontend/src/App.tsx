@@ -1,254 +1,220 @@
-import { useState, useCallback } from 'react'
-import type { AnalyzeResponse, LogLevel, TraceFilters } from './types'
-import { analyzeRP } from './api/analyze'
-import { ScoreCard } from './components/ScoreCard'
-import { Pipeline } from './components/Pipeline'
-import { StrategyList } from './components/StrategyList'
+import { startTransition, useMemo, useState } from 'react'
+import { IssuesPanel } from './components/IssuesPanel'
+import { MetricsBar } from './components/MetricsBar'
+import { PipelineLoader } from './components/PipelineLoader'
+import { PRContextHeader } from './components/PRContextHeader'
 import { ReviewPanel } from './components/ReviewPanel'
-import { IssuesList } from './components/IssuesList'
+import { ScoreCard } from './components/ScoreCard'
+import { StrategyList } from './components/StrategyList'
 import { TracePanel } from './components/TracePanel'
+import { useReviewState } from './hooks/useReviewState'
 
-interface AppState {
-  prUrl: string
-  data: AnalyzeResponse | null
-  loading: boolean
-  error: string | null
-  activeStrategyId: string
-  compareStrategyIds: string[]
-  selectedPipelineAgent: string | null
-  traceFilters: TraceFilters
-  expandedAgents: Record<string, boolean>
+type TabKey = 'review' | 'issues' | 'trace'
+
+const TABS: Array<{ key: TabKey; label: string }> = [
+  { key: 'review', label: 'Review' },
+  { key: 'issues', label: 'Issues' },
+  { key: 'trace', label: 'Trace' },
+]
+
+function LoadingState() {
+  return (
+    <div className="surface-panel flex min-h-[420px] flex-col justify-center rounded-3xl p-8">
+      <div className="mx-auto w-full max-w-5xl text-center">
+        <p className="section-label">Pipeline</p>
+        <h2 className="mt-3 text-3xl font-semibold text-white">Analyzing PR...</h2>
+        <p className="mt-3 text-sm text-slate-400">
+          Running multi-agent pipeline...
+        </p>
+        <PipelineLoader />
+      </div>
+    </div>
+  )
+}
+
+function EmptyState() {
+  return (
+    <div className="surface-panel flex min-h-[420px] flex-col justify-center rounded-3xl p-8">
+      <p className="section-label">Ready</p>
+      <h2 className="mt-3 text-3xl font-semibold text-white">
+        Analyze a pull request diff
+      </h2>
+      <p className="mt-3 max-w-2xl text-sm leading-7 text-slate-400">
+        Paste a GitHub diff URL to inspect score, strategies, structured issues,
+        and the full multi-agent timeline in one place.
+      </p>
+    </div>
+  )
+}
+
+function ErrorState({ message }: { message: string }) {
+  return (
+    <div className="surface-panel flex min-h-[420px] flex-col justify-center rounded-3xl border border-red-500/30 p-8">
+      <p className="section-label">Request Error</p>
+      <h2 className="mt-3 text-2xl font-semibold text-white">
+        Unable to render review results
+      </h2>
+      <p className="mt-3 max-w-2xl text-sm leading-7 text-slate-300">
+        {message}
+      </p>
+    </div>
+  )
 }
 
 export default function App() {
-  const [state, setState] = useState<AppState>({
-    prUrl: 'mock://pr/security-issue',
-    data: null,
-    loading: false,
-    error: null,
-    activeStrategyId: '',
-    compareStrategyIds: [],
-    selectedPipelineAgent: null,
-    traceFilters: { INFO: true, WARN: true, ERROR: true, DEBUG: true },
-    expandedAgents: {},
-  })
+  const [activeTab, setActiveTab] = useState<TabKey>('review')
+  const {
+    prUrl,
+    lastAnalyzedUrl,
+    data,
+    loading,
+    error,
+    activeStrategyId,
+    expandedAgents,
+    setPrUrl,
+    analyze,
+    setActiveStrategy,
+    toggleAgent,
+    expandAll,
+    collapseAll,
+  } = useReviewState()
 
-  const handleAnalyze = useCallback(async () => {
-    const url = state.prUrl.trim()
-    if (!url) return
-
-    setState(s => ({
-      ...s,
-      loading: true,
-      error: null,
-      data: null,
-      activeStrategyId: '',
-      compareStrategyIds: [],
-      selectedPipelineAgent: null,
-      expandedAgents: {},
-    }))
-
-    try {
-      const res = await analyzeRP(url)
-
-      // ✅ FIX: normalize backend response
-      const normalized: AnalyzeResponse = {
-        score: res.score ?? 0,
-        issues: res.issues ?? [],
-        trace: res.trace ?? [],
-        review: res.review ?? '',
-        strategies: [
-          {
-            id: res.selected_strategy ?? 'default',
-            name: res.selected_strategy ?? 'Default',
-            score: res.score ?? 0,
-            description: 'Auto-selected strategy',
-          },
-        ],
-        selected_strategy: res.selected_strategy ?? 'default',
-      }
-
-      const agents = [...new Set(normalized.trace.map(t => t.agent))]
-
-      setState(s => ({
-        ...s,
-        data: normalized,
-        loading: false,
-        activeStrategyId:
-          normalized.selected_strategy ||
-          normalized.strategies[0]?.id ||
-          '',
-        expandedAgents: Object.fromEntries(
-          agents.map(a => [a, false])
-        ),
-      }))
-    } catch (err) {
-      setState(s => ({
-        ...s,
-        loading: false,
-        error: err instanceof Error ? err.message : 'Request failed',
-      }))
-    }
-  }, [state.prUrl])
-
-  const setActiveStrategy = (id: string) =>
-    setState(s => ({ ...s, activeStrategyId: id }))
-
-  const toggleCompare = (id: string) =>
-    setState(s => {
-      const prev = s.compareStrategyIds
-      if (prev.includes(id))
-        return { ...s, compareStrategyIds: prev.filter(x => x !== id) }
-      if (prev.length >= 2)
-        return { ...s, compareStrategyIds: [prev[1], id] }
-      return { ...s, compareStrategyIds: [...prev, id] }
-    })
-
-  const clearCompare = () =>
-    setState(s => ({ ...s, compareStrategyIds: [] }))
-
-  const selectPipelineAgent = (agent: string) =>
-    setState(s => {
-      const next = s.selectedPipelineAgent === agent ? null : agent
-
-      if (next !== null && s.data) {
-        const trace = s.data.trace ?? []
-        const agents = [...new Set(trace.map(t => t.agent))]
-        const expanded = Object.fromEntries(
-          agents.map(a => [a, a === next])
-        )
-        return { ...s, selectedPipelineAgent: next, expandedAgents: expanded }
-      }
-
-      return { ...s, selectedPipelineAgent: next }
-    })
-
-  const toggleFilter = (level: LogLevel) =>
-    setState(s => ({
-      ...s,
-      traceFilters: {
-        ...s.traceFilters,
-        [level]: !s.traceFilters[level],
-      },
-    }))
-
-  const toggleAgent = (agent: string) =>
-    setState(s => ({
-      ...s,
-      expandedAgents: {
-        ...s.expandedAgents,
-        [agent]: !s.expandedAgents[agent],
-      },
-    }))
-
-  const expandAll = () =>
-    setState(s => {
-      if (!s.data) return s
-      const agents = [...new Set(s.data.trace.map(t => t.agent))]
-      return {
-        ...s,
-        expandedAgents: Object.fromEntries(
-          agents.map(a => [a, true])
-        ),
-      }
-    })
-
-  const collapseAll = () =>
-    setState(s => {
-      if (!s.data) return s
-      const agents = [...new Set(s.data.trace.map(t => t.agent))]
-      return {
-        ...s,
-        expandedAgents: Object.fromEntries(
-          agents.map(a => [a, false])
-        ),
-      }
-    })
-
-  const clearPipelineFilter = () =>
-    setState(s => ({ ...s, selectedPipelineAgent: null }))
-
-  const { data, loading, error } = state
-
-  const trace = data?.trace ?? []
   const strategies = data?.strategies ?? []
   const issues = data?.issues ?? []
+  const trace = data?.trace ?? []
   const review = data?.review ?? ''
 
-  const triggeredBranch =
-    trace.some(t => t.agent === 'branch_agent') ?? false
+  const activeStrategy = useMemo(
+    () =>
+      strategies.find(strategy => strategy.id === activeStrategyId) ??
+      strategies[0] ??
+      null,
+    [activeStrategyId, strategies]
+  )
+
+  const handleAnalyze = () => {
+    const nextUrl = prUrl.trim()
+    if (!nextUrl) return
+
+    startTransition(() => setActiveTab('review'))
+    analyze(nextUrl)
+  }
+
+  const handleSelectStrategy = (id: string) => {
+    setActiveStrategy(id)
+    startTransition(() => setActiveTab('review'))
+  }
+
+  const handleTabChange = (tab: TabKey) => {
+    startTransition(() => setActiveTab(tab))
+  }
 
   return (
-    <div className="flex flex-col h-screen bg-[#0a0a0a] overflow-hidden">
+    <div className="h-screen overflow-hidden bg-app text-slate-100">
+      <div className="mx-auto flex h-screen max-w-[1700px] flex-col px-4 py-4 lg:px-6">
+        <header className="surface-panel shrink-0 rounded-3xl px-5 py-4">
+          <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+            <div>
+              <p className="section-label">PR Critic</p>
+              <h1 className="mt-2 text-2xl font-semibold text-white">
+                Premium PR review dashboard
+              </h1>
+              <p className="mt-2 text-sm text-slate-400">
+                GitHub-style review workflow with DevTools-style analysis surfaces.
+              </p>
+            </div>
 
-      <header className="flex items-center px-4 py-2 border-b border-gray-800">
-        <span className="text-sm text-white">PR Review</span>
-      </header>
+            <div className="flex w-full max-w-3xl gap-3">
+              <input
+                value={prUrl}
+                onChange={event => setPrUrl(event.target.value)}
+                onKeyDown={event => event.key === 'Enter' && handleAnalyze()}
+                placeholder="https://github.com/org/repo/pull/123.diff"
+                className="h-12 flex-1 rounded-2xl border border-white/10 bg-black/20 px-4 text-sm text-white outline-none transition placeholder:text-slate-500 focus:border-emerald-400/50 focus:ring-2 focus:ring-emerald-400/20"
+              />
+              <button
+                onClick={handleAnalyze}
+                disabled={loading}
+                className="inline-flex h-12 items-center justify-center rounded-2xl bg-emerald-400 px-5 text-sm font-semibold text-slate-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:bg-emerald-400/40"
+              >
+                Analyze
+              </button>
+            </div>
+          </div>
+        </header>
 
-      <div className="p-4 border-b border-gray-800 flex gap-2">
-        <input
-          value={state.prUrl}
-          onChange={e =>
-            setState(s => ({ ...s, prUrl: e.target.value }))
-          }
-          onKeyDown={e => e.key === 'Enter' && handleAnalyze()}
-          className="flex-1 bg-black border px-3 py-2 text-white"
-        />
-        <button
-          onClick={handleAnalyze}
-          disabled={loading}
-          className="bg-white text-black px-4"
-        >
-          {loading ? '...' : 'Analyze'}
-        </button>
-      </div>
-
-      {loading && <div className="p-4 text-white">Loading...</div>}
-      {error && <div className="p-4 text-red-500">{error}</div>}
-
-      {!loading && !error && data && (
-        <div className="flex flex-1">
-
-          <aside className="w-[350px] border-r border-gray-800 overflow-auto">
-            <ScoreCard data={data} />
-            <Pipeline
-              trace={trace}
-              selectedAgent={state.selectedPipelineAgent}
-              onSelect={selectPipelineAgent}
-              triggeredBranch={triggeredBranch}
-            />
-            <StrategyList
-              strategies={strategies}
-              activeId={state.activeStrategyId}
-              compareIds={state.compareStrategyIds}
-              onSelect={setActiveStrategy}
-              onToggleCompare={toggleCompare}
-            />
+        <div className="mt-4 grid min-h-0 flex-1 gap-4 lg:grid-cols-[360px_minmax(0,1fr)]">
+          <aside className="min-h-0 overflow-y-auto pr-1">
+            <div className="flex flex-col gap-4 lg:sticky lg:top-0">
+              <ScoreCard data={data} />
+              <StrategyList
+                strategies={strategies}
+                activeId={activeStrategyId}
+                onSelect={handleSelectStrategy}
+              />
+            </div>
           </aside>
 
-          <main className="flex-1 overflow-auto">
-            <ReviewPanel
-              strategies={strategies}
-              activeId={state.activeStrategyId}
-              compareIds={state.compareStrategyIds}
-              review={review}
-              onClearCompare={clearCompare}
-            />
-            <IssuesList issues={issues} />
-            <TracePanel
-              trace={trace}
-              selectedAgent={state.selectedPipelineAgent}
-              filters={state.traceFilters}
-              expandedAgents={state.expandedAgents}
-              onToggleAgent={toggleAgent}
-              onToggleFilter={toggleFilter}
-              onExpandAll={expandAll}
-              onCollapseAll={collapseAll}
-              onClearFilter={clearPipelineFilter}
-            />
+          <main className="min-w-0 min-h-0 overflow-y-auto pr-1">
+            {loading ? (
+              <LoadingState />
+            ) : error ? (
+              <ErrorState message={error} />
+            ) : !data ? (
+              <EmptyState />
+            ) : (
+              <section className="surface-panel min-h-full overflow-hidden rounded-3xl">
+                <PRContextHeader prUrl={lastAnalyzedUrl || prUrl} trace={trace} />
+                <div className="flex flex-wrap items-center gap-3 border-b border-white/10 px-6 py-5">
+                  {TABS.map(tab => {
+                    const count =
+                      tab.key === 'issues'
+                        ? issues.length
+                        : tab.key === 'trace'
+                        ? trace.length
+                        : undefined
+
+                    return (
+                      <button
+                        key={tab.key}
+                        onClick={() => handleTabChange(tab.key)}
+                        className={`tab-button ${activeTab === tab.key ? 'tab-button-active' : ''}`}
+                      >
+                        <span>{tab.label}</span>
+                        {typeof count === 'number' && (
+                          <span className="rounded-full bg-black/20 px-2 py-0.5 text-[11px] text-slate-300">
+                            {count}
+                          </span>
+                        )}
+                      </button>
+                    )
+                  })}
+                </div>
+
+                <MetricsBar issues={issues} />
+
+                <div key={activeTab} className="tab-panel p-6">
+                  {activeTab === 'review' && (
+                    <ReviewPanel strategy={activeStrategy} review={review} />
+                  )}
+
+                  {activeTab === 'issues' && <IssuesPanel issues={issues} />}
+
+                  {activeTab === 'trace' && (
+                    <TracePanel
+                      trace={trace}
+                      expandedAgents={expandedAgents}
+                      onToggleAgent={toggleAgent}
+                      onExpandAll={expandAll}
+                      onCollapseAll={collapseAll}
+                    />
+                  )}
+                </div>
+              </section>
+            )}
           </main>
         </div>
-      )}
+      </div>
     </div>
   )
 }
