@@ -1,135 +1,283 @@
 # PR Critic
 
-Multi-agent system for automated pull request analysis.
+PR Critic is a multi-agent pull request review system. It fetches a PR diff, enriches it with retrieval context, generates review candidates, scores them, and returns a structured response for a React dashboard.
 
----
+The repository contains:
 
-## Overview
+- A FastAPI backend that runs the review pipeline
+- A React + TypeScript frontend for inspection and triage
+- Evaluation scripts and scenarios for repeatable testing
 
-PR Critic analyzes pull requests using a structured multi-agent pipeline:
+## What The System Does
 
-Fetch → RAG → Review → Critic → Branch → Select
+Given a pull request diff URL, the backend executes a review workflow:
 
-Each step is handled by a dedicated agent. The system evaluates code changes, generates reviews, scores their quality, and dynamically decides whether additional analysis strategies are required.
+1. Fetch the diff and PR metadata
+2. Retrieve supporting context from the local corpus
+3. Generate a code review
+4. Critique the review and score it
+5. Branch into alternative strategies when needed
+6. Select the best final review
 
----
+The frontend renders the result as a review dashboard with score, strategies, issues, and execution trace.
+
+## Backend Response Contract
+
+The backend response shape is the source of truth for the frontend:
+
+```json
+{
+  "score": 8.5,
+  "strategies": [
+    {
+      "id": "initial",
+      "name": "Balanced Review",
+      "score": 8.5,
+      "description": "Balanced review covering correctness, security, style, and maintainability."
+    }
+  ],
+  "selected_strategy": "initial",
+  "review": "## Summary\n...",
+  "issues": [
+    {
+      "severity": "info",
+      "file": "src/components/ChatWindow.tsx",
+      "line": 81,
+      "message": "Example issue message."
+    }
+  ],
+  "trace": [
+    {
+      "agent": "fetch_agent",
+      "level": "INFO",
+      "message": "fetch_agent completed: language=TypeScript, diff_length=3268, in 2239ms",
+      "timestamp": "2026-04-13T15:54:06.892849+00:00"
+    }
+  ]
+}
+```
 
 ## Architecture
 
-Pipeline flow:
+### Review Pipeline
 
-- Fetch — retrieves PR diff and metadata  
-- RAG — enriches context with relevant best practices  
-- Review — generates initial code review  
-- Critic — evaluates review quality (0–10)  
-- Branch — triggers additional strategies if score is below threshold  
-- Select — chooses the best review  
+- `fetch_agent`: loads PR diff and metadata
+- `rag_agent`: retrieves relevant guidance from local reference data
+- `review_agent`: produces the initial review text
+- `critic_agent`: scores the review and decides whether branching is needed
+- `branch_agent`: generates alternate review strategies when the score is below threshold
+- `selector_agent`: picks the final review to return
 
-Key features:
+### Backend
 
-- Multi-agent orchestration (LangGraph)
-- Structured state passing between agents
-- Dynamic branching based on review quality
-- Deterministic behavior in mock mode
+- Framework: FastAPI
+- Orchestration: LangGraph
+- Models: LangChain integrations
+- Observability: trace events emitted through the workflow
 
----
+### Frontend
 
-## Project Structure
+- Framework: React 18
+- Build tool: Vite
+- Language: TypeScript
+- Styling: Tailwind CSS and component-level utility classes
 
-backend/        # core logic (agents, graph, config)
-data/corpus/    # RAG data
-evaluation/     # evaluation scenarios and metrics
-scripts/        # utility scripts (evaluation runner)
-tests/          # unit and integration tests
+## Repository Layout
 
----
+```text
+backend/
+  agents/           Individual review pipeline agents
+  api/              FastAPI app and API helpers
+  graph/            Workflow state and LangGraph assembly
+  mcp/              GitHub access and mock implementations
+  observability/    Logging helpers
+  rag/              Retrieval components
+
+data/               Retrieval corpus and local reference material
+evaluation/         Evaluation scenarios, metrics, and result outputs
+frontend/           React dashboard
+scripts/            Developer utilities, including evaluation runner
+tests/              Automated tests
+```
 
 ## Requirements
 
-- Python 3.10+
-- Groq API key (for live mode)
-
----
+- Python 3.11 or later
+- Node.js 18 or later
+- npm
+- `GROQ_API_KEY` for live LLM execution
 
 ## Setup
 
-pip install -r requirements.txt
+### 1. Install backend dependencies
 
-Create `.env` file:
+From the repository root:
 
-GROQ_API_KEY=your_key_here
+```bash
+pip install -e ".[dev]"
+```
 
----
+### 2. Configure environment
 
-## Running the Backend
+Create a `.env` file in the repository root:
 
+```env
+GROQ_API_KEY=your_api_key
+```
+
+### 3. Install frontend dependencies
+
+```bash
+cd frontend
+npm install
+```
+
+## Running The Project
+
+### Start the backend
+
+From the repository root:
+
+```bash
 uvicorn backend.api.main:app --reload --port 8000
+```
 
-Server will start at:
+Default local address:
 
+```text
 http://127.0.0.1:8000
+```
 
----
+### Start the frontend
 
-## Running Tests
+In a separate terminal:
 
+```bash
+cd frontend
+npm run dev
+```
+
+Default local address:
+
+```text
+http://127.0.0.1:5173
+```
+
+## API Endpoints
+
+### `POST /review`
+
+Runs the full review pipeline for a pull request diff URL.
+
+Request body:
+
+```json
+{
+  "pr_url": "https://github.com/org/repo/pull/123.diff"
+}
+```
+
+### `GET /review/mock-prs`
+
+Returns the list of built-in mock PRs available for local testing.
+
+### `GET /health`
+
+Returns service health and basic runtime metadata.
+
+## Local Development Workflow
+
+### Run tests
+
+From the repository root:
+
+```bash
 pytest -v
+```
 
-Expected:
+### Run evaluation in mock mode
 
-- All tests pass
-- Full pipeline coverage
-- No crashes on edge cases
+Mock mode does not require live model calls.
 
----
-
-## Evaluation
-
-Run evaluation in mock mode (no API calls):
-
+```bash
 python scripts/run_evaluation.py --mock
+```
 
-Run with real LLM:
+### Run evaluation in live mode
 
+```bash
 python scripts/run_evaluation.py --delay 1.0
+```
 
-Run specific scenario:
+### Run a specific scenario
 
-python scripts/run_evaluation.py --scenario <name>
+```bash
+python scripts/run_evaluation.py --scenario sec/sql-injection
+```
 
-Run specific category:
+### Run selected categories
 
-python scripts/run_evaluation.py --categories security
+```bash
+python scripts/run_evaluation.py --categories security,style
+```
 
-Output:
+Evaluation results are written to:
 
+```text
 evaluation/results.json
-
----
+```
 
 ## Configuration
 
-Main settings are defined in:
+Runtime settings are defined in `backend/config.py`.
 
-backend/config.py
+Key settings include:
 
-Key parameters:
-
-- branch_score_threshold — triggers branching
-- max_branch_alternatives — number of strategies
-- reasoning_model — LLM used for critic
-
----
+- Branch score threshold
+- Maximum number of branch alternatives
+- Generation and reasoning model selection
+- GitHub integration behavior
 
 ## Notes
 
-- Mock mode uses deterministic outputs for testing
-- Live mode depends on external API (Groq)
-- Evaluation layer is independent from pipeline logic
+- The backend is the owner of the response contract consumed by the frontend.
+- The frontend should use only the documented fields in the response payload.
+- Mock mode is intended for deterministic local testing and evaluation.
+- Live mode depends on valid external model credentials.
 
----
+## Troubleshooting
 
-## Status
+### Backend starts but `/review` fails
 
-Backend and evaluation layer are complete and tested.
-Frontend is not included in this version.
+Check:
+
+- `.env` exists in the repository root
+- `GROQ_API_KEY` is set for live mode
+- The PR diff URL is reachable and valid
+
+### Frontend loads but shows no data
+
+Check:
+
+- Backend is running on port `8000`
+- Frontend dev server is running on port `5173`
+- Browser network requests to `/review` are succeeding
+
+### Evaluation run fails
+
+Check:
+
+- Python environment is active
+- Project dependencies are installed
+- Use `--mock` first to validate the pipeline locally
+
+## Current Scope
+
+This repository is structured for iterative work on:
+
+- Backend review quality
+- Branching and strategy selection
+- Frontend review UX
+- Evaluation coverage and repeatability
+
+The intended outcome is a production-oriented developer tool, not a demo-only prototype.
