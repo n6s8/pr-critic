@@ -1,14 +1,12 @@
 """
-Mock GitHub PR provider.
+mcp/github_mock.py — PR data provider / smart router.
 
-Interface is identical to what a real GitHub MCP integration would return.
-To upgrade to real GitHub MCP:
-  1. pip install mcp
-  2. Set GITHUB_TOKEN in .env
-  3. Replace get_pr_data() body with real MCP calls
-  4. Everything else stays unchanged
+Routes:
+  mock://...              → built-in mock data (always works)
+  https://github.com/...  → real GitHub API via github_client.py
+  anything else           → treat as raw diff string (ad-hoc testing)
 """
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 @dataclass
@@ -79,24 +77,35 @@ MOCK_PRS: dict[str, PRData] = {
 +    return [item * 2 for item in data if item is not None]
 """,
     ),
-    "mock://pr/style-only": PRData(
-        url="mock://pr/style-only",
-        title="Fix variable naming",
+    "mock://pr/typescript-react": PRData(
+        url="mock://pr/typescript-react",
+        title="Add user profile component with hooks",
         author="dev_carol",
         base_branch="main",
-        head_branch="fix/naming",
-        files_changed=["utils/helpers.py"],
-        language="Python",
-        diff="""diff --git a/utils/helpers.py b/utils/helpers.py
---- a/utils/helpers.py
-+++ b/utils/helpers.py
-@@ -3,6 +3,6 @@
--def calc(x,y,z):
--    r = x+y
--    return r*z
-+def calculate_weighted_sum(base: float, offset: float, weight: float) -> float:
-+    total = base + offset
-+    return total * weight
+        head_branch="feat/user-profile",
+        files_changed=["src/components/UserProfile.tsx", "src/hooks/useUser.ts"],
+        language="TypeScript",
+        diff="""diff --git a/src/components/UserProfile.tsx b/src/components/UserProfile.tsx
+--- a/src/components/UserProfile.tsx
++++ b/src/components/UserProfile.tsx
+@@ -0,0 +1,34 @@
++import React, { useEffect, useState } from 'react'
++
++export function UserProfile({ userId }: { userId: any }) {
++  const [user, setUser] = useState(null)
++
++  useEffect(() => {
++    fetch('/api/users/' + userId)
++      .then(r => r.json())
++      .then(data => setUser(data))
++  }, [])
++
++  if (!user) return <div>Loading...</div>
++
++  return (
++    <div dangerouslySetInnerHTML={{ __html: user.bio }} />
++  )
++}
 """,
     ),
     "mock://pr/empty": PRData(
@@ -114,12 +123,37 @@ MOCK_PRS: dict[str, PRData] = {
 
 def get_pr_data(pr_url: str) -> PRData:
     """
-    Fetch PR by URL. Returns mock data or falls back to treating
-    the URL string as a raw diff for manual testing.
+    Smart router:
+      1. mock:// → built-in mock data
+      2. github.com PR URL → real GitHub API
+      3. anything else → raw diff fallback
     """
     if pr_url in MOCK_PRS:
         return MOCK_PRS[pr_url]
-    # Unknown URL → treat as raw diff input (useful for ad-hoc testing)
+
+    if pr_url.startswith("https://github.com/") and "/pull/" in pr_url:
+        try:
+            from backend.mcp.github_client import get_real_pr_data
+            from backend.config import settings
+            token = getattr(settings, "github_token", None) or None
+            return get_real_pr_data(pr_url, token=token)
+        except Exception as exc:
+            return PRData(
+                url=pr_url,
+                title="GitHub fetch failed",
+                author="unknown",
+                base_branch="main",
+                head_branch="feature",
+                files_changed=[],
+                language="Unknown",
+                diff=(
+                    f"# ERROR: Could not fetch PR from GitHub\n"
+                    f"# Reason: {exc}\n"
+                    f"# Check GITHUB_TOKEN in .env and ensure the PR is accessible."
+                ),
+            )
+
+    # Raw diff fallback
     return PRData(
         url=pr_url,
         title="Custom PR",

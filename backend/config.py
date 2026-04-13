@@ -1,3 +1,4 @@
+from typing import Optional
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -11,9 +12,10 @@ class Settings(BaseSettings):
 
     groq_api_key: str = Field(..., validation_alias="GROQ_API_KEY")
 
-    # llama-3.1-8b-instant — fast, for generation agents
+    # Optional — needed for private repos, raises rate limit to 5000/hr
+    github_token: Optional[str] = Field(default=None, validation_alias="GITHUB_TOKEN")
+
     generation_model: str = "llama-3.1-8b-instant"
-    # llama-3.1-8b-instant — stronger reasoning, for critic and selector
     reasoning_model: str = "llama-3.1-8b-instant"
 
     branch_score_threshold: int = Field(default=7, validation_alias="BRANCH_SCORE_THRESHOLD")
