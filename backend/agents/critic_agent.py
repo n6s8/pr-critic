@@ -12,12 +12,15 @@ from langchain_core.messages import SystemMessage, HumanMessage
 from backend.config import settings
 from backend.graph.state import PRCriticState
 from backend.observability.logger import log_start, log_end, log_error, log_routing
+from backend.utils.resilience import invoke_llm
 
 _llm = ChatGroq(
     model=settings.reasoning_model,
     api_key=settings.groq_api_key,
     temperature=0.1,
     max_tokens=512,
+    timeout=settings.llm_timeout_seconds,
+    max_retries=0,
 )
 
 _SYSTEM = """You are evaluating the quality of a code review.
@@ -70,7 +73,11 @@ def critic_agent(state: PRCriticState) -> dict:
 
 Score this review."""
 
-        resp = _llm.invoke([SystemMessage(content=_SYSTEM), HumanMessage(content=human)])
+        resp = invoke_llm(
+            _llm,
+            [SystemMessage(content=_SYSTEM), HumanMessage(content=human)],
+            agent="critic_agent",
+        )
         score, rationale, issues = _parse(resp.content)
         score = max(0.0, min(10.0, score))
 

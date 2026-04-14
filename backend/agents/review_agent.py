@@ -14,12 +14,15 @@ from langchain_core.messages import SystemMessage, HumanMessage
 from backend.config import settings
 from backend.graph.state import PRCriticState, ReviewCandidate
 from backend.observability.logger import log_start, log_end, log_error
+from backend.utils.resilience import invoke_llm
 
 _llm = ChatGroq(
     model=settings.generation_model,
     api_key=settings.groq_api_key,
     temperature=0.2,
     max_tokens=1200,
+    timeout=settings.llm_timeout_seconds,
+    max_retries=0,
 )
 
 _SYSTEM = """You are a senior software engineer performing a precise code review.
@@ -106,7 +109,11 @@ IMPORTANT: Review ONLY the following diff. Do not comment on code outside this d
 
 Please review this PR following the rules in your system prompt."""
 
-        resp = _llm.invoke([SystemMessage(content=_SYSTEM), HumanMessage(content=human)])
+        resp = invoke_llm(
+            _llm,
+            [SystemMessage(content=_SYSTEM), HumanMessage(content=human)],
+            agent="review_agent",
+        )
         candidate = {
             "review": resp.content,
             "strategy": "initial",

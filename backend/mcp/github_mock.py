@@ -1,12 +1,7 @@
-"""
-mcp/github_mock.py — PR data provider / smart router.
-
-Routes:
-  mock://...              → built-in mock data (always works)
-  https://github.com/...  → real GitHub API via github_client.py
-  anything else           → treat as raw diff string (ad-hoc testing)
-"""
+"""PR data provider and smart router for mock and GitHub-backed inputs."""
 from dataclasses import dataclass
+
+from backend.observability.logger import log_structured
 
 
 @dataclass
@@ -124,20 +119,28 @@ MOCK_PRS: dict[str, PRData] = {
 def get_pr_data(pr_url: str) -> PRData:
     """
     Smart router:
-      1. mock:// → built-in mock data
-      2. github.com PR URL → real GitHub API
-      3. anything else → raw diff fallback
+      1. mock:// -> built-in mock data
+      2. github.com PR URL -> real GitHub API
+      3. anything else -> raw diff fallback
     """
     if pr_url in MOCK_PRS:
         return MOCK_PRS[pr_url]
 
     if pr_url.startswith("https://github.com/") and "/pull/" in pr_url:
         try:
-            from backend.mcp.github_client import get_real_pr_data
             from backend.config import settings
+            from backend.mcp.github_client import get_real_pr_data
+
             token = getattr(settings, "github_token", None) or None
             return get_real_pr_data(pr_url, token=token)
         except Exception as exc:
+            log_structured(
+                "ERROR",
+                "github_fetch_fallback",
+                pr_url=pr_url,
+                error_type=type(exc).__name__,
+                error=str(exc),
+            )
             return PRData(
                 url=pr_url,
                 title="GitHub fetch failed",
@@ -147,13 +150,12 @@ def get_pr_data(pr_url: str) -> PRData:
                 files_changed=[],
                 language="Unknown",
                 diff=(
-                    f"# ERROR: Could not fetch PR from GitHub\n"
+                    "# ERROR: Could not fetch PR from GitHub\n"
                     f"# Reason: {exc}\n"
-                    f"# Check GITHUB_TOKEN in .env and ensure the PR is accessible."
+                    "# Check GITHUB_TOKEN in .env and ensure the PR is accessible."
                 ),
             )
 
-    # Raw diff fallback
     return PRData(
         url=pr_url,
         title="Custom PR",

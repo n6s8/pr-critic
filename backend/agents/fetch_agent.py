@@ -18,6 +18,7 @@ def fetch_agent(state: PRCriticState) -> dict:
     t0 = time.perf_counter()
     pr_url = state["pr_url"]
     log_start("fetch_agent", {"pr_url": pr_url})
+    trace = list(state.get("trace", []))
 
     try:
         pr = get_pr_data(pr_url)
@@ -40,6 +41,9 @@ def fetch_agent(state: PRCriticState) -> dict:
             "pr_url": pr_url,
         }
 
+        if pr.diff.strip().startswith("# ERROR:"):
+            trace.append(log_error("fetch_agent", f"Failed to fetch PR data for {pr_url}"))
+
         ev = log_end("fetch_agent", {
             "title": pr.title,
             "files_changed": pr.files_changed,
@@ -51,7 +55,7 @@ def fetch_agent(state: PRCriticState) -> dict:
         return {
             "pr_diff": pr.diff,
             "pr_metadata": metadata,
-            "trace": state.get("trace", []) + [ev],
+            "trace": trace + [ev],
         }
 
     except Exception as exc:
@@ -59,5 +63,5 @@ def fetch_agent(state: PRCriticState) -> dict:
         return {
             "pr_diff": "",
             "pr_metadata": {"language": "Unknown", "title": "Fetch failed", "error": str(exc)},
-            "trace": state.get("trace", []) + [ev],
+            "trace": trace + [ev],
         }

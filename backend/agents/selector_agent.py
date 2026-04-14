@@ -10,13 +10,16 @@ from langchain_core.messages import SystemMessage, HumanMessage
 
 from backend.config import settings
 from backend.graph.state import PRCriticState, ReviewCandidate
-from backend.observability.logger import log_start, log_end, log_error
+from backend.observability.logger import log_start, log_end, log_error, log_structured
+from backend.utils.resilience import invoke_llm
 
 _llm = ChatGroq(
     model=settings.reasoning_model,
     api_key=settings.groq_api_key,
     temperature=0.1,
     max_tokens=256,
+    timeout=settings.llm_timeout_seconds,
+    max_retries=0,
 )
 
 _SYSTEM = """Select the best code review from the candidates below.
@@ -32,13 +35,23 @@ def _rerank(candidates: list[ReviewCandidate], diff: str) -> tuple[int, str]:
     )
     human = f"## Diff (first 400 chars)\n{diff[:400]}\n\n## Candidates\n{summaries}\n\nChoose best."
     try:
-        resp = _llm.invoke([SystemMessage(content=_SYSTEM), HumanMessage(content=human)])
+        resp = invoke_llm(
+            _llm,
+            [SystemMessage(content=_SYSTEM), HumanMessage(content=human)],
+            agent="selector_agent",
+        )
         d = json.loads(resp.content.strip())
         idx = int(d.get("best_index", 0))
         if 0 <= idx < len(candidates):
             return idx, d.get("rationale", "")
-    except Exception:
-        pass
+    except Exception as exc:
+        log_structured(
+            "WARNING",
+            "selector_rerank_fallback",
+            agent="selector_agent",
+            error_type=type(exc).__name__,
+            error=str(exc),
+        )
     # Fallback: highest score
     best = max(range(len(candidates)), key=lambda i: candidates[i]["score"])
     return best, "Fallback: highest numeric score"

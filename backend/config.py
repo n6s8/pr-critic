@@ -24,6 +24,21 @@ class Settings(BaseSettings):
     chroma_dir: str = Field(default="data/chroma", validation_alias="CHROMA_DIR")
     log_dir: str = Field(default="logs", validation_alias="LOG_DIR")
     log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
+    llm_timeout_seconds: float = Field(default=45.0, validation_alias="LLM_TIMEOUT_SECONDS")
+    github_timeout_seconds: float = Field(default=20.0, validation_alias="GITHUB_TIMEOUT_SECONDS")
+    external_api_retries: int = Field(default=3, validation_alias="EXTERNAL_API_RETRIES")
+    external_api_retry_backoff_seconds: float = Field(
+        default=0.5,
+        validation_alias="EXTERNAL_API_RETRY_BACKOFF_SECONDS",
+    )
+    external_api_max_backoff_seconds: float = Field(
+        default=4.0,
+        validation_alias="EXTERNAL_API_MAX_BACKOFF_SECONDS",
+    )
+    rate_limit_requests: int = Field(default=30, validation_alias="RATE_LIMIT_REQUESTS")
+    rate_limit_window_seconds: int = Field(default=60, validation_alias="RATE_LIMIT_WINDOW_SECONDS")
+    pr_cache_ttl_seconds: int = Field(default=120, validation_alias="PR_CACHE_TTL_SECONDS")
+    rag_cache_ttl_seconds: int = Field(default=300, validation_alias="RAG_CACHE_TTL_SECONDS")
 
 
 settings = Settings()

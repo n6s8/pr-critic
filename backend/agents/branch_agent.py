@@ -11,12 +11,15 @@ from langchain_core.messages import SystemMessage, HumanMessage
 from backend.config import settings
 from backend.graph.state import PRCriticState, ReviewCandidate
 from backend.observability.logger import log_start, log_end, log_error
+from backend.utils.resilience import invoke_llm
 
 _llm = ChatGroq(
     model=settings.generation_model,
     api_key=settings.groq_api_key,
     temperature=0.5,
     max_tokens=1200,
+    timeout=settings.llm_timeout_seconds,
+    max_retries=0,
 )
 
 # Base rules prepended to every strategy prompt
@@ -163,10 +166,14 @@ IMPORTANT: Review ONLY the following diff.
 ```
 
 Please review using your assigned strategy."""
-            resp = _llm.invoke([
-                SystemMessage(content=strategy["prompt"]),
-                HumanMessage(content=human),
-            ])
+            resp = invoke_llm(
+                _llm,
+                [
+                    SystemMessage(content=strategy["prompt"]),
+                    HumanMessage(content=human),
+                ],
+                agent="branch_agent",
+            )
             new_candidates.append({
                 "review": resp.content,
                 "strategy": strategy["name"],

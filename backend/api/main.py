@@ -1,7 +1,7 @@
 """
-api/main.py — FastAPI application.
+FastAPI application for the PR Critic backend.
 
-Response schema matches the frontend's AnalyzeResponse TypeScript interface:
+Success responses keep the same contract used by the frontend:
   {
     score: number,
     strategies: Strategy[],
@@ -10,21 +10,31 @@ Response schema matches the frontend's AnalyzeResponse TypeScript interface:
     issues: Issue[],
     trace: TraceEntry[],
   }
-
-Also keeps the previous /review/mock-prs and /health endpoints.
 """
+from __future__ import annotations
+
 import logging
+import time
+import uuid
+from collections import defaultdict, deque
 from datetime import datetime, timezone
+from threading import Lock
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from backend.graph.workflow import compiled_graph
-from backend.graph.state import PRCriticState
-from backend.mcp.github_mock import MOCK_PRS
 from backend.api.issue_extractor import extract_issues
+from backend.config import settings
+from backend.graph.state import PRCriticState
+from backend.graph.workflow import compiled_graph
+from backend.mcp.github_mock import MOCK_PRS
+from backend.observability.logger import configure_logging, get_logger, log_structured
+
+configure_logging()
 
 app = FastAPI(title="PR Critic", version="0.2.0")
 app.add_middleware(
@@ -34,8 +44,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+_api_log = get_logger("pr_critic.api")
+_rate_limit_state: dict[str, deque[float]] = defaultdict(deque)
+_rate_limit_lock = Lock()
 
-# ── Request / Response models matching frontend TypeScript types ──────────────
 
 class ReviewRequest(BaseModel):
     pr_url: str = Field(..., examples=["mock://pr/security-issue"])
@@ -63,7 +75,6 @@ class TraceEntryOut(BaseModel):
 
 
 class ReviewResponse(BaseModel):
-    """Matches the frontend AnalyzeResponse interface exactly."""
     score: float
     strategies: list[StrategyOut]
     selected_strategy: str
@@ -72,40 +83,34 @@ class ReviewResponse(BaseModel):
     trace: list[TraceEntryOut]
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
 _STRATEGY_DESCRIPTIONS: dict[str, str] = {
-    "initial":           "Balanced review covering correctness, security, style, and maintainability.",
-    "security_focus":    "Prioritizes authentication, injection, cryptographic weaknesses, and OWASP vulnerabilities.",
+    "initial": "Balanced review covering correctness, security, style, and maintainability.",
+    "security_focus": "Prioritizes authentication, injection, cryptographic weaknesses, and OWASP vulnerabilities.",
     "correctness_focus": "Focuses on logic errors, edge cases, null handling, and runtime correctness.",
     "typescript_idioms": "TypeScript/JavaScript idioms: type safety, hooks correctness, async patterns.",
-    "python_idioms":     "Pythonic patterns, type annotations, PEP 8, and Python-specific anti-patterns.",
-    "minimal_style":     "Pragmatic review: correctness first, then readability. Skips trivial style issues.",
+    "python_idioms": "Pythonic patterns, type annotations, PEP 8, and Python-specific anti-patterns.",
+    "minimal_style": "Pragmatic review: correctness first, then readability. Skips trivial style issues.",
 }
 
 _STRATEGY_DISPLAY_NAMES: dict[str, str] = {
-    "initial":           "Balanced Review",
-    "security_focus":    "Security-First Review",
+    "initial": "Balanced Review",
+    "security_focus": "Security-First Review",
     "correctness_focus": "Correctness Review",
     "typescript_idioms": "TypeScript/JS Review",
-    "python_idioms":     "Python Best Practices",
-    "minimal_style":     "Pragmatic Review",
+    "python_idioms": "Python Best Practices",
+    "minimal_style": "Pragmatic Review",
 }
 
 
 def _normalize_trace(raw_trace: list[dict]) -> list[TraceEntryOut]:
-    """
-    Convert the internal trace format (ts, agent, event, data, duration_ms)
-    to the frontend's TraceEntry format (agent, level, message, timestamp).
-    """
+    """Convert internal trace events to the frontend trace shape."""
     entries: list[TraceEntryOut] = []
-    for ev in raw_trace:
-        agent = ev.get("agent", "unknown")
-        event_type = ev.get("event", "")
-        data = ev.get("data", {})
-        ts = ev.get("ts", datetime.now(timezone.utc).isoformat())
+    for event in raw_trace:
+        agent = event.get("agent", "unknown")
+        event_type = event.get("event", "")
+        data = event.get("data", {})
+        ts = event.get("ts", datetime.now(timezone.utc).isoformat())
 
-        # Determine level
         if event_type == "error":
             level: Literal["INFO", "WARN", "ERROR", "DEBUG"] = "ERROR"
         elif event_type == "routing_decision":
@@ -113,73 +118,251 @@ def _normalize_trace(raw_trace: list[dict]) -> list[TraceEntryOut]:
         else:
             level = "INFO"
 
-        # Check data for warning signals
         if isinstance(data, dict):
             if data.get("trigger_branch") is True:
                 level = "WARN"
             if "error" in data:
                 level = "ERROR"
 
-        # Build human-readable message
         if event_type == "start":
-            msg = f"Starting {agent}"
+            message = f"Starting {agent}"
             if "diff_length" in data:
-                msg += f" (diff: {data['diff_length']} chars)"
+                message += f" (diff: {data['diff_length']} chars)"
             if "language" in data:
-                msg += f", language: {data['language']}"
+                message += f", language: {data['language']}"
         elif event_type == "end":
-            msg_parts = []
-            for key in ("score", "review_length", "context_length", "generated",
-                        "selected_strategy", "mode", "language", "diff_length", "files_changed"):
+            message_parts = []
+            for key in (
+                "score",
+                "review_length",
+                "context_length",
+                "generated",
+                "selected_strategy",
+                "mode",
+                "language",
+                "diff_length",
+                "files_changed",
+                "cache_hit",
+            ):
                 if key in data:
-                    msg_parts.append(f"{key}={data[key]}")
-            duration = ev.get("duration_ms")
+                    message_parts.append(f"{key}={data[key]}")
+            duration = event.get("duration_ms")
             if duration:
-                msg_parts.append(f"in {duration:.0f}ms")
-            msg = f"{agent} completed" + (f": {', '.join(msg_parts)}" if msg_parts else "")
+                message_parts.append(f"in {duration:.0f}ms")
+            message = f"{agent} completed" + (f": {', '.join(message_parts)}" if message_parts else "")
         elif event_type == "routing_decision":
             decision = data.get("decision", "?")
             reason = data.get("reason", "")
             level = "WARN" if decision == "branch" else "INFO"
-            msg = f"Routing → {decision} ({reason})"
+            message = f"Routing -> {decision} ({reason})"
         elif event_type == "error":
-            msg = f"Error: {data.get('error', 'unknown error')}"
+            message = f"Error: {data.get('error', 'unknown error')}"
         elif event_type == "fetch_complete":
-            msg = (
+            message = (
                 f"GitHub PR fetched: {data.get('files_changed', 0)} files, "
                 f"language={data.get('language', '?')}, "
                 f"diff={data.get('diff_length', 0)} chars"
             )
         else:
-            msg = f"{agent} {event_type}"
+            message = f"{agent} {event_type}"
             if data:
-                snippet = str(data)[:120]
-                msg += f": {snippet}"
+                message += f": {str(data)[:120]}"
 
-        entries.append(TraceEntryOut(
-            agent=agent,
-            level=level,
-            message=msg,
-            timestamp=ts,
-        ))
+        entries.append(
+            TraceEntryOut(
+                agent=agent,
+                level=level,
+                message=message,
+                timestamp=ts,
+            )
+        )
     return entries
 
 
 def _candidates_to_strategies(candidates: list[dict]) -> list[StrategyOut]:
-    """Convert internal ReviewCandidate dicts to StrategyOut objects."""
     out: list[StrategyOut] = []
-    for c in candidates:
-        strategy_id = c.get("strategy", "initial")
-        out.append(StrategyOut(
-            id=strategy_id,
-            name=_STRATEGY_DISPLAY_NAMES.get(strategy_id, strategy_id.replace("_", " ").title()),
-            score=round(c.get("score", 0.0), 2),
-            description=_STRATEGY_DESCRIPTIONS.get(strategy_id, ""),
-        ))
+    for candidate in candidates:
+        strategy_id = candidate.get("strategy", "initial")
+        out.append(
+            StrategyOut(
+                id=strategy_id,
+                name=_STRATEGY_DISPLAY_NAMES.get(strategy_id, strategy_id.replace("_", " ").title()),
+                score=round(candidate.get("score", 0.0), 2),
+                description=_STRATEGY_DESCRIPTIONS.get(strategy_id, ""),
+            )
+        )
     return out
 
 
-# ── Endpoints ─────────────────────────────────────────────────────────────────
+def _error_payload(
+    status_code: int,
+    code: str,
+    message: str,
+    request_id: str,
+    details: object | None = None,
+) -> dict:
+    payload = {
+        "detail": message,
+        "error": {
+            "code": code,
+            "message": message,
+            "status_code": status_code,
+            "request_id": request_id,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        },
+    }
+    if details is not None:
+        payload["error"]["details"] = details
+    return payload
+
+
+def _client_id(request: Request) -> str:
+    forwarded_for = request.headers.get("x-forwarded-for", "")
+    if forwarded_for:
+        return forwarded_for.split(",")[0].strip() or "unknown"
+    if request.client and request.client.host:
+        return request.client.host
+    return "unknown"
+
+
+def _rate_limit_exceeded(client_id: str) -> bool:
+    now = time.monotonic()
+    with _rate_limit_lock:
+        bucket = _rate_limit_state[client_id]
+        while bucket and now - bucket[0] > settings.rate_limit_window_seconds:
+            bucket.popleft()
+        if len(bucket) >= settings.rate_limit_requests:
+            return True
+        bucket.append(now)
+        return False
+
+
+@app.middleware("http")
+async def request_context_middleware(request: Request, call_next):
+    request_id = str(uuid.uuid4())
+    request.state.request_id = request_id
+    client_id = _client_id(request)
+
+    if request.url.path != "/health" and _rate_limit_exceeded(client_id):
+        log_structured(
+            "WARNING",
+            "rate_limit_exceeded",
+            request_id=request_id,
+            path=request.url.path,
+            method=request.method,
+            client_id=client_id,
+        )
+        response = JSONResponse(
+            status_code=429,
+            content=_error_payload(
+                429,
+                "rate_limited",
+                "Too many requests. Please retry shortly.",
+                request_id,
+            ),
+        )
+        response.headers["X-Request-ID"] = request_id
+        return response
+
+    started_at = time.perf_counter()
+    try:
+        response = await call_next(request)
+    except Exception:
+        duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
+        log_structured(
+            "ERROR",
+            "request_failed_uncaught",
+            request_id=request_id,
+            path=request.url.path,
+            method=request.method,
+            client_id=client_id,
+            duration_ms=duration_ms,
+        )
+        raise
+
+    duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
+    log_structured(
+        "INFO",
+        "request_completed",
+        request_id=request_id,
+        path=request.url.path,
+        method=request.method,
+        client_id=client_id,
+        status_code=response.status_code,
+        duration_ms=duration_ms,
+    )
+    response.headers["X-Request-ID"] = request_id
+    return response
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    request_id = getattr(request.state, "request_id", "unknown")
+    if isinstance(exc.detail, str):
+        message = exc.detail
+    elif isinstance(exc.detail, dict):
+        message = str(exc.detail.get("message") or exc.detail.get("detail") or "Request failed")
+    else:
+        message = "Request failed"
+
+    log_structured(
+        "ERROR" if exc.status_code >= 500 else "WARNING",
+        "http_exception",
+        request_id=request_id,
+        path=request.url.path,
+        method=request.method,
+        status_code=exc.status_code,
+        detail=exc.detail,
+    )
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=_error_payload(exc.status_code, "http_error", message, request_id, exc.detail),
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    request_id = getattr(request.state, "request_id", "unknown")
+    log_structured(
+        "WARNING",
+        "validation_error",
+        request_id=request_id,
+        path=request.url.path,
+        method=request.method,
+        errors=exc.errors(),
+    )
+    return JSONResponse(
+        status_code=422,
+        content=_error_payload(
+            422,
+            "validation_error",
+            "Invalid request payload.",
+            request_id,
+            exc.errors(),
+        ),
+    )
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    request_id = getattr(request.state, "request_id", "unknown")
+    _api_log.exception(
+        "Unhandled exception",
+        extra={
+            "extra": {
+                "request_id": request_id,
+                "path": request.url.path,
+                "method": request.method,
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            }
+        },
+    )
+    return JSONResponse(
+        status_code=500,
+        content=_error_payload(500, "internal_error", "Internal server error.", request_id),
+    )
+
 
 @app.post("/review", response_model=ReviewResponse)
 async def review_pr(req: ReviewRequest):
@@ -200,37 +383,32 @@ async def review_pr(req: ReviewRequest):
         result = compiled_graph.invoke(initial)
     except Exception as exc:
         logging.exception("Pipeline failed for %s", req.pr_url)
-        raise HTTPException(status_code=500, detail=f"Pipeline error: {exc}")
+        raise HTTPException(status_code=500, detail=f"Pipeline error: {exc}") from exc
 
     best = result.get("best_candidate")
     if not best:
         raise HTTPException(status_code=500, detail="Pipeline produced no review candidate")
 
-    # Build strategies list from all candidates (sorted by score desc)
     all_candidates = result.get("candidates", [])
     strategies = sorted(
         _candidates_to_strategies(all_candidates),
-        key=lambda s: s.score,
+        key=lambda strategy: strategy.score,
         reverse=True,
     )
 
-    # Extract structured issues from the best review
     files_changed = result.get("pr_metadata", {}).get("files_changed", [])
     raw_issues = extract_issues(best["review"], files_changed)
     issues_out = [
         IssueOut(
-            severity=i["severity"],  # type: ignore[arg-type]
-            file=i["file"],
-            line=i["line"],
-            message=i["message"],
+            severity=issue["severity"],  # type: ignore[arg-type]
+            file=issue["file"],
+            line=issue["line"],
+            message=issue["message"],
         )
-        for i in raw_issues
+        for issue in raw_issues
     ]
 
-    # Normalize trace
     trace_out = _normalize_trace(result.get("trace", []))
-
-    # Score: use best candidate score, scale 0-10 → int-ish float for UI
     score = round(best.get("score", 0.0), 1)
 
     return ReviewResponse(
@@ -247,15 +425,14 @@ async def review_pr(req: ReviewRequest):
 async def list_mock_prs():
     return {
         "mock_prs": [
-            {"url": k, "title": v.title, "language": v.language}
-            for k, v in MOCK_PRS.items()
+            {"url": key, "title": value.title, "language": value.language}
+            for key, value in MOCK_PRS.items()
         ]
     }
 
 
 @app.get("/health")
 async def health():
-    from backend.config import settings
     return {
         "status": "ok",
         "version": "0.2.0",

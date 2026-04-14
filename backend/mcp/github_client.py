@@ -1,25 +1,20 @@
-"""
-mcp/github_client.py — Real GitHub PR data fetcher.
+"""Real GitHub PR data fetcher with retry, timeout, and cache support."""
+from __future__ import annotations
 
-Parses GitHub PR URLs and fetches real diff + metadata via the
-GitHub REST API.  Falls back gracefully when no token is set
-(public repos only, lower rate limit).
-
-Set GITHUB_TOKEN in .env to enable private repos and higher rate limits.
-"""
 import re
 import time
 from dataclasses import dataclass
 
 import httpx
 
+from backend.config import settings
 from backend.observability.logger import record
+from backend.utils.cache import TTLCache, build_cache_key
+from backend.utils.resilience import is_retryable_github_error, retry_call
 
-
-# ── URL parsing ───────────────────────────────────────────────────────────────
 
 _GITHUB_URL_RE = re.compile(
-    r"https?://github\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+)/pull/(?P<number>\d+)"
+    r"https?://github\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+)/pull/(?P<number>\d+)/?"
 )
 
 
@@ -31,17 +26,19 @@ class GHPRRef:
 
 
 def parse_github_url(url: str) -> "GHPRRef | None":
-    m = _GITHUB_URL_RE.match(url.strip())
-    if not m:
+    match = _GITHUB_URL_RE.match(url.strip())
+    if not match:
         return None
-    return GHPRRef(owner=m.group("owner"), repo=m.group("repo"), number=int(m.group("number")))
+    return GHPRRef(
+        owner=match.group("owner"),
+        repo=match.group("repo"),
+        number=int(match.group("number")),
+    )
 
 
 def is_github_url(url: str) -> bool:
     return parse_github_url(url) is not None
 
-
-# ── Language detection ────────────────────────────────────────────────────────
 
 _EXT_TO_LANGUAGE: dict[str, str] = {
     ".py": "Python", ".pyi": "Python",
@@ -59,91 +56,111 @@ _EXT_TO_LANGUAGE: dict[str, str] = {
     ".sh": "Shell", ".bash": "Shell",
 }
 
-# Per-language RAG query terms that retrieve the most relevant corpus chunks
 LANGUAGE_RAG_TERMS: dict[str, str] = {
-    "Python":     "Python code review PEP8 style security OWASP exception handling",
+    "Python": "Python code review PEP8 style security OWASP exception handling",
     "TypeScript": "TypeScript JavaScript ESLint type safety React hooks security best practices",
     "JavaScript": "JavaScript ESLint code review security async promises best practices",
-    "Go":         "Go Golang error handling interfaces concurrency best practices",
-    "Rust":       "Rust memory safety ownership borrowing error handling",
-    "Java":       "Java code review SOLID principles security OWASP best practices",
-    "Kotlin":     "Kotlin Android coroutines null safety best practices",
-    "C#":         "C# .NET LINQ async await security best practices",
-    "Ruby":       "Ruby Rails code review security best practices",
-    "PHP":        "PHP security OWASP injection XSS best practices",
+    "Go": "Go Golang error handling interfaces concurrency best practices",
+    "Rust": "Rust memory safety ownership borrowing error handling",
+    "Java": "Java code review SOLID principles security OWASP best practices",
+    "Kotlin": "Kotlin Android coroutines null safety best practices",
+    "C#": "C# .NET LINQ async await security best practices",
+    "Ruby": "Ruby Rails code review security best practices",
+    "PHP": "PHP security OWASP injection XSS best practices",
 }
 
 
 def detect_language(filenames: list[str]) -> str:
-    """Detect primary language from changed file extensions (frequency vote)."""
+    """Detect primary language from changed file extensions."""
     from collections import Counter
+
     counts: Counter[str] = Counter()
-    for fname in filenames:
-        if "." in fname:
-            ext = "." + fname.rsplit(".", 1)[-1].lower()
-            lang = _EXT_TO_LANGUAGE.get(ext)
-            if lang:
-                counts[lang] += 1
+    for filename in filenames:
+        if "." not in filename:
+            continue
+        ext = "." + filename.rsplit(".", 1)[-1].lower()
+        language = _EXT_TO_LANGUAGE.get(ext)
+        if language:
+            counts[language] += 1
     return counts.most_common(1)[0][0] if counts else "Unknown"
 
 
-# ── GitHub REST API helpers ───────────────────────────────────────────────────
-
 _API_BASE = "https://api.github.com"
-_TIMEOUT  = httpx.Timeout(30.0)
+_TIMEOUT = httpx.Timeout(settings.github_timeout_seconds)
+_PR_CACHE: TTLCache["PRData"] = TTLCache("pr_fetch", settings.pr_cache_ttl_seconds, max_size=64)
 
 
-def _headers(token: "str | None" = None) -> dict[str, str]:
-    h = {
+def _headers(token: str | None = None) -> dict[str, str]:
+    headers = {
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
         "User-Agent": "pr-critic/1.0",
     }
     if token:
-        h["Authorization"] = f"Bearer {token}"
-    return h
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
 
 
-def _fetch_pr_meta(ref: GHPRRef, token: "str | None") -> dict:
+def _request_json(url: str, headers: dict[str, str], params: dict | None = None) -> dict | list[dict]:
+    def _operation():
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            response = client.get(url, headers=headers, params=params)
+            response.raise_for_status()
+            return response.json()
+
+    return retry_call(
+        _operation,
+        service="github",
+        operation_name="json_get",
+        should_retry=is_retryable_github_error,
+        context={"url": url},
+    )
+
+
+def _request_text(url: str, headers: dict[str, str], *, follow_redirects: bool = False) -> str:
+    def _operation():
+        with httpx.Client(timeout=_TIMEOUT, follow_redirects=follow_redirects) as client:
+            response = client.get(url, headers=headers)
+            response.raise_for_status()
+            return response.text
+
+    return retry_call(
+        _operation,
+        service="github",
+        operation_name="text_get",
+        should_retry=is_retryable_github_error,
+        context={"url": url},
+    )
+
+
+def _fetch_pr_meta(ref: GHPRRef, token: str | None) -> dict:
     url = f"{_API_BASE}/repos/{ref.owner}/{ref.repo}/pulls/{ref.number}"
-    with httpx.Client(timeout=_TIMEOUT) as c:
-        r = c.get(url, headers=_headers(token))
-        r.raise_for_status()
-        return r.json()
+    data = _request_json(url, _headers(token))
+    return data if isinstance(data, dict) else {}
 
 
-def _fetch_diff(ref: GHPRRef, token: "str | None") -> str:
-    """Fetch raw unified diff via the diff media type, with .diff URL fallback."""
+def _fetch_diff(ref: GHPRRef, token: str | None) -> str:
+    """Fetch raw unified diff via API first, then .diff fallback."""
     url = f"{_API_BASE}/repos/{ref.owner}/{ref.repo}/pulls/{ref.number}"
-    h = _headers(token)
-    h["Accept"] = "application/vnd.github.v3.diff"
-    with httpx.Client(timeout=_TIMEOUT) as c:
-        r = c.get(url, headers=h)
-        r.raise_for_status()
-        diff = r.text
+    headers = _headers(token)
+    headers["Accept"] = "application/vnd.github.v3.diff"
+    diff = _request_text(url, headers)
     if diff.strip().startswith("diff --git"):
         return diff
-    # Fallback: public .diff URL
+
     fallback = f"https://github.com/{ref.owner}/{ref.repo}/pull/{ref.number}.diff"
-    fh: dict[str, str] = {"User-Agent": "pr-critic/1.0"}
+    fallback_headers = {"User-Agent": "pr-critic/1.0"}
     if token:
-        fh["Authorization"] = f"Bearer {token}"
-    with httpx.Client(timeout=_TIMEOUT, follow_redirects=True) as c:
-        r2 = c.get(fallback, headers=fh)
-        r2.raise_for_status()
-        return r2.text
+        fallback_headers["Authorization"] = f"Bearer {token}"
+    return _request_text(fallback, fallback_headers, follow_redirects=True)
 
 
-def _fetch_files(ref: GHPRRef, token: "str | None") -> list[dict]:
-    """Paginate through changed files (up to 300)."""
+def _fetch_files(ref: GHPRRef, token: str | None) -> list[dict]:
     files: list[dict] = []
     for page in range(1, 4):
         url = f"{_API_BASE}/repos/{ref.owner}/{ref.repo}/pulls/{ref.number}/files"
-        with httpx.Client(timeout=_TIMEOUT) as c:
-            r = c.get(url, headers=_headers(token), params={"per_page": 100, "page": page})
-            r.raise_for_status()
-            batch = r.json()
-        if not batch:
+        batch = _request_json(url, _headers(token), params={"per_page": 100, "page": page})
+        if not isinstance(batch, list) or not batch:
             break
         files.extend(batch)
         if len(batch) < 100:
@@ -151,58 +168,66 @@ def _fetch_files(ref: GHPRRef, token: "str | None") -> list[dict]:
     return files
 
 
-# ── Public entry point ────────────────────────────────────────────────────────
-
-# Import here to avoid circular — PRData is defined in github_mock.py
 from backend.mcp.github_mock import PRData  # noqa: E402
 
-MAX_DIFF_CHARS = 8_000   # ~2k tokens — enough for most PRs without hitting limits
+MAX_DIFF_CHARS = 8_000
 
 
-def get_real_pr_data(pr_url: str, token: "str | None" = None) -> PRData:
+def get_real_pr_data(pr_url: str, token: str | None = None) -> PRData:
     """
-    Full fetch pipeline: URL → meta → files → language → diff.
-    Returns PRData with the same interface as mock data so no other
-    agent needs to change.
+    Full fetch pipeline: URL -> meta -> files -> language -> diff.
 
     Raises:
         ValueError: URL is not a valid GitHub PR URL.
-        httpx.HTTPStatusError: GitHub API returned an error (404, 403, etc.).
+        httpx.HTTPStatusError: GitHub API returned an error.
     """
     ref = parse_github_url(pr_url)
     if ref is None:
         raise ValueError(f"Not a GitHub PR URL: {pr_url!r}")
 
-    t0 = time.perf_counter()
+    token_key = build_cache_key(token or "anonymous")
+    cache_key = build_cache_key(pr_url, token_key)
 
-    meta   = _fetch_pr_meta(ref, token)
-    files  = _fetch_files(ref, token)
-    names  = [f["filename"] for f in files]
-    lang   = detect_language(names)
-    diff   = _fetch_diff(ref, token)
+    def _load() -> PRData:
+        started_at = time.perf_counter()
+        meta = _fetch_pr_meta(ref, token)
+        files = _fetch_files(ref, token)
+        file_names = [item["filename"] for item in files if "filename" in item]
+        language = detect_language(file_names)
+        diff = _fetch_diff(ref, token)
 
-    # Truncate to avoid LLM token overflow
-    if len(diff) > MAX_DIFF_CHARS:
-        omitted = len(diff) - MAX_DIFF_CHARS
-        diff = (
-            diff[:MAX_DIFF_CHARS]
-            + f"\n\n... [diff truncated — {omitted} chars omitted to fit context window] ..."
+        if len(diff) > MAX_DIFF_CHARS:
+            omitted = len(diff) - MAX_DIFF_CHARS
+            diff = (
+                diff[:MAX_DIFF_CHARS]
+                + f"\n\n... [diff truncated - {omitted} chars omitted to fit context window] ..."
+            )
+
+        elapsed_ms = (time.perf_counter() - started_at) * 1000
+        record(
+            "github_client",
+            "fetch_complete",
+            {
+                "owner": ref.owner,
+                "repo": ref.repo,
+                "pr_number": ref.number,
+                "files_changed": len(file_names),
+                "language": language,
+                "diff_length": len(diff),
+                "elapsed_ms": round(elapsed_ms, 1),
+            },
         )
 
-    elapsed = (time.perf_counter() - t0) * 1000
-    record("github_client", "fetch_complete", {
-        "owner": ref.owner, "repo": ref.repo, "pr_number": ref.number,
-        "files_changed": len(names), "language": lang,
-        "diff_length": len(diff), "elapsed_ms": round(elapsed, 1),
-    })
+        return PRData(
+            url=pr_url,
+            title=meta.get("title", ""),
+            author=meta.get("user", {}).get("login", "unknown"),
+            base_branch=meta.get("base", {}).get("ref", "main"),
+            head_branch=meta.get("head", {}).get("ref", "feature"),
+            files_changed=file_names,
+            language=language,
+            diff=diff,
+        )
 
-    return PRData(
-        url=pr_url,
-        title=meta.get("title", ""),
-        author=meta.get("user", {}).get("login", "unknown"),
-        base_branch=meta.get("base", {}).get("ref", "main"),
-        head_branch=meta.get("head", {}).get("ref", "feature"),
-        files_changed=names,
-        language=lang,
-        diff=diff,
-    )
+    pr_data, _ = _PR_CACHE.get_or_compute(cache_key, _load)
+    return pr_data
