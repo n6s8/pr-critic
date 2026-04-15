@@ -37,10 +37,6 @@ const SEVERITY_ORDER = {
   minor: 2,
 } as const
 
-const VIRTUALIZATION_THRESHOLD = 30
-const VIRTUAL_ROW_HEIGHT = 132
-const VIRTUAL_PANEL_HEIGHT = 560
-
 type SeverityTone = keyof typeof SEVERITY_STYLES
 type SortMode = 'severity' | 'file'
 
@@ -208,7 +204,6 @@ function IssuesPanelComponent({
   })
   const [copiedIssueId, setCopiedIssueId] = useState<string | null>(null)
   const [lastOpenedIssueId, setLastOpenedIssueId] = useState<string | null>(null)
-  const [scrollTop, setScrollTop] = useState(0)
 
   const counts = useMemo(() => getIssueCounts(issues), [issues])
 
@@ -255,27 +250,6 @@ function IssuesPanelComponent({
       minor: filteredIssues.filter(issue => getIssueSeverityTone(issue.severity) === 'minor'),
     }
   }, [filteredIssues])
-
-  const visibleWindow = useMemo(() => {
-    if (filteredIssues.length <= VIRTUALIZATION_THRESHOLD) {
-      return {
-        items: filteredIssues,
-        topSpacer: 0,
-        bottomSpacer: 0,
-      }
-    }
-
-    const overscan = 5
-    const startIndex = Math.max(0, Math.floor(scrollTop / VIRTUAL_ROW_HEIGHT) - overscan)
-    const visibleCount = Math.ceil(VIRTUAL_PANEL_HEIGHT / VIRTUAL_ROW_HEIGHT) + overscan * 2
-    const endIndex = Math.min(filteredIssues.length, startIndex + visibleCount)
-
-    return {
-      items: filteredIssues.slice(startIndex, endIndex),
-      topSpacer: startIndex * VIRTUAL_ROW_HEIGHT,
-      bottomSpacer: (filteredIssues.length - endIndex) * VIRTUAL_ROW_HEIGHT,
-    }
-  }, [filteredIssues, scrollTop])
 
   const handleCopy = async (issue: Issue) => {
     const issueId = getIssueId(issue)
@@ -435,26 +409,6 @@ function IssuesPanelComponent({
         <div className="mt-6 rounded-3xl border border-white/10 bg-black/12 p-6">
           <p className="section-label">Issues</p>
           <p className="mt-3 text-sm text-slate-300">No issues found.</p>
-        </div>
-      ) : filteredIssues.length > VIRTUALIZATION_THRESHOLD ? (
-        <div className="mt-6">
-          <div className="mb-3 flex items-center justify-between">
-            <p className="text-sm font-medium text-white">Virtualized issue list</p>
-            <p className="text-xs text-slate-500">
-              Rendering windowed rows for long result sets
-            </p>
-          </div>
-          <div
-            className="overflow-y-auto rounded-3xl border border-white/10 bg-black/12 p-3"
-            style={{ maxHeight: `${VIRTUAL_PANEL_HEIGHT}px` }}
-            onScroll={event => setScrollTop(event.currentTarget.scrollTop)}
-          >
-            <div style={{ height: visibleWindow.topSpacer }} />
-            <div className="space-y-3">
-              {visibleWindow.items.map(renderIssueCard)}
-            </div>
-            <div style={{ height: visibleWindow.bottomSpacer }} />
-          </div>
         </div>
       ) : (
         <div className="mt-6 space-y-6">

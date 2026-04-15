@@ -599,7 +599,7 @@ function DiffPanelComponent({
                 </div>
               </div>
 
-              <div className="diff-scroll max-h-[760px] overflow-auto">
+              <div className="diff-scroll overflow-x-auto">
                 {selectedFile.hunks.map(hunk => (
                   <div key={hunk.id} className="border-b border-white/5 last:border-b-0">
                     <div className="sticky top-0 z-10 border-y border-white/5 bg-slate-950/95 px-4 py-2 font-mono text-xs text-sky-300 backdrop-blur">
