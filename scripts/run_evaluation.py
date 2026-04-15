@@ -34,6 +34,7 @@ os.environ.setdefault("GROQ_API_KEY", "eval_placeholder")
 
 from evaluation.scenarios import SCENARIOS
 from evaluation.metrics import make_run_result, compute_summary, format_summary_table
+from backend.config import settings
 
 
 # ── LLM mock helpers ──────────────────────────────────────────────────────────
@@ -258,8 +259,8 @@ def main() -> None:
             "run_at": datetime.now(timezone.utc).isoformat(),
             "mode": "mock" if args.mock else "live",
             "total_scenarios": len(scenarios),
-            "groq_generation_model": "llama-3.1-8b-instant",
-            "groq_reasoning_model": "mixtral-8x7b-32768",
+            "groq_generation_model": settings.generation_model,
+            "groq_reasoning_model": settings.reasoning_model,
         },
         "summary": summary,
         "results": results,
@@ -275,6 +276,9 @@ def main() -> None:
     print()
     print(format_summary_table(summary))
     print(f"\nResults saved -> {out_path}")
+
+    if summary.get("failed_runs", 0) > 0 or summary.get("error"):
+        sys.exit(1)
 
 
 if __name__ == "__main__":

@@ -87,7 +87,7 @@ def detect_language(filenames: list[str]) -> str:
 
 _API_BASE = "https://api.github.com"
 _TIMEOUT = httpx.Timeout(settings.github_timeout_seconds)
-_PR_CACHE: TTLCache["PRData"] = TTLCache("pr_fetch", settings.pr_cache_ttl_seconds, max_size=64)
+_PR_CACHE: TTLCache["PRData"] = TTLCache("pr_fetch", settings.caches.pr_ttl_seconds, max_size=64)
 
 
 def _headers(token: str | None = None) -> dict[str, str]:

@@ -1,4 +1,10 @@
-import { memo, useEffect, useMemo, useState } from 'react'
+import {
+  memo,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import type { TraceEntry } from '../types'
 import {
   cn,
@@ -62,6 +68,7 @@ function TracePanelComponent({
   const grouped = useMemo(() => groupTraceByAgent(trace), [trace])
   const agents = useMemo(() => Object.keys(grouped), [grouped])
   const latestAgent = agents[agents.length - 1] ?? ''
+  const latestAgentRef = useRef<HTMLElement | null>(null)
   const [expandedEntries, setExpandedEntries] = useState<Record<string, boolean>>({})
 
   useEffect(() => {
@@ -73,6 +80,19 @@ function TracePanelComponent({
     const latestEntryKey = `${latestAgent}-${latestEntries.length - 1}`
     setExpandedEntries({ [latestEntryKey]: true })
   }, [grouped, latestAgent])
+
+  useEffect(() => {
+    if (!latestAgentRef.current) return
+
+    const frame = window.requestAnimationFrame(() => {
+      latestAgentRef.current?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'nearest',
+      })
+    })
+
+    return () => window.cancelAnimationFrame(frame)
+  }, [latestAgent, trace.length])
 
   if (trace.length === 0) {
     return (
@@ -90,9 +110,9 @@ function TracePanelComponent({
       <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/10 pb-5">
         <div>
           <p className="section-label">Trace</p>
-          <h2 className="mt-2 text-2xl font-semibold text-white">DevTools Timeline</h2>
+          <h2 className="mt-2 text-2xl font-semibold text-white">Execution Timeline</h2>
           <p className="mt-2 text-sm text-slate-400">
-            Multi-agent execution rendered as a clickable investigation timeline.
+            Multi-agent execution rendered as an interactive, auto-tracking timeline.
           </p>
         </div>
 
@@ -118,25 +138,48 @@ function TracePanelComponent({
           const isExpanded = expandedAgents[agent] ?? false
           const status = getAgentStatus(entries)
           const duration = formatDuration(getAgentDurationMs(entries))
+          const isLatest = agent === latestAgent
 
           return (
             <article
               key={agent}
-              className="card-lift rounded-3xl border border-white/10 bg-black/12"
+              ref={isLatest ? latestAgentRef : undefined}
+              className={cn(
+                'card-lift relative overflow-hidden rounded-3xl border bg-black/12 transition-all duration-300',
+                isLatest
+                  ? 'border-emerald-400/20 shadow-[0_18px_56px_rgba(16,185,129,0.12)]'
+                  : 'border-white/10'
+              )}
             >
+              <span className="absolute left-6 top-0 h-full w-px bg-gradient-to-b from-white/0 via-white/10 to-white/0" />
+
               <button
                 onClick={() => onToggleAgent(agent)}
-                className="flex w-full items-center gap-3 px-5 py-4 text-left transition hover:bg-white/[0.03]"
+                className="flex w-full items-center gap-4 px-5 py-4 text-left transition hover:bg-white/[0.03]"
               >
-                <span className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] text-slate-300">
+                <span
+                  className={cn(
+                    'relative z-[1] inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full border text-slate-300 transition-all duration-300',
+                    isLatest
+                      ? 'border-emerald-400/25 bg-emerald-500/10 shadow-[0_0_0_8px_rgba(16,185,129,0.06)]'
+                      : 'border-white/10 bg-white/[0.04]'
+                  )}
+                >
+                  {isLatest && <span className="trace-node-pulse absolute inset-0 rounded-full" />}
                   <Chevron expanded={isExpanded} />
                 </span>
 
-                <div className="relative min-w-0 flex-1 pl-5">
-                  <span className="absolute left-0 top-0 h-full w-px bg-white/10" />
-                  <p className="text-sm font-semibold text-white">
-                    {formatAgentName(agent)}
-                  </p>
+                <div className="relative min-w-0 flex-1 pl-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="text-sm font-semibold text-white">
+                      {formatAgentName(agent)}
+                    </p>
+                    {isLatest && (
+                      <span className="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-emerald-200">
+                        Active
+                      </span>
+                    )}
+                  </div>
                   <p className="mt-1 truncate text-xs text-slate-500">
                     {entries[entries.length - 1]?.message ?? 'No log entries'}
                   </p>
@@ -159,16 +202,26 @@ function TracePanelComponent({
                     {entries.map((entry, index) => {
                       const entryKey = `${agent}-${index}`
                       const entryExpanded = expandedEntries[entryKey] ?? false
+                      const isLatestEntry = isLatest && index === entries.length - 1
 
                       return (
-                        <div key={entryKey} className="relative pl-6">
-                          {index < entries.length - 1 && (
-                            <span className="absolute left-[7px] top-4 h-[calc(100%+1rem)] w-px bg-white/10" />
-                          )}
+                        <div key={entryKey} className="trace-entry relative pl-7">
+                          <span className="absolute left-[9px] top-0 h-full w-px bg-white/10" />
+                          <span
+                            className={cn(
+                              'absolute left-0 top-3 h-[18px] w-[18px] rounded-full border transition-all duration-300',
+                              isLatestEntry
+                                ? 'border-emerald-400/30 bg-emerald-500/20 shadow-[0_0_0_8px_rgba(16,185,129,0.08)]'
+                                : 'border-white/10 bg-slate-800'
+                            )}
+                          />
 
-                          <span className="absolute left-0 top-2.5 h-3.5 w-3.5 rounded-full border border-white/10 bg-slate-800" />
-
-                          <div className="overflow-hidden rounded-2xl border border-white/10 bg-white/[0.02]">
+                          <div
+                            className={cn(
+                              'overflow-hidden rounded-2xl border border-white/10 bg-white/[0.02] transition-all duration-300',
+                              isLatestEntry && 'border-emerald-400/20 bg-emerald-500/[0.04]'
+                            )}
+                          >
                             <button
                               onClick={() =>
                                 setExpandedEntries(current => ({
@@ -186,7 +239,10 @@ function TracePanelComponent({
                                   <span className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold ${LEVEL_STYLES[entry.level]}`}>
                                     [{entry.level}]
                                   </span>
-                                  <span className="text-xs text-slate-500" title={formatTraceTimestamp(entry.timestamp)}>
+                                  <span
+                                    className="text-xs text-slate-500"
+                                    title={formatTraceTimestamp(entry.timestamp)}
+                                  >
                                     {formatRelativeTime(entry.timestamp) || formatTraceTimestamp(entry.timestamp)}
                                   </span>
                                 </div>

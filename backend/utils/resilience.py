@@ -38,8 +38,9 @@ def retry_call(
     base_delay_seconds: float | None = None,
     context: dict[str, Any] | None = None,
 ) -> T:
-    max_attempts = max(1, attempts or settings.external_api_retries)
-    delay = max(0.0, base_delay_seconds or settings.external_api_retry_backoff_seconds)
+    retry_policy = settings.retries
+    max_attempts = max(1, attempts or retry_policy.attempts)
+    delay = max(0.0, base_delay_seconds or retry_policy.base_delay_seconds)
     fields = dict(context or {})
 
     for attempt in range(1, max_attempts + 1):
@@ -64,7 +65,7 @@ def retry_call(
 
             sleep_seconds = min(
                 delay * (2 ** (attempt - 1)),
-                settings.external_api_max_backoff_seconds,
+                retry_policy.max_backoff_seconds,
             )
             if sleep_seconds > 0:
                 time.sleep(sleep_seconds)

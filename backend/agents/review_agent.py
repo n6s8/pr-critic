@@ -8,22 +8,16 @@ Anti-hallucination improvements:
   - Temperature lowered to 0.2
 """
 import time
+
 from langchain_groq import ChatGroq
 from langchain_core.messages import SystemMessage, HumanMessage
 
 from backend.config import settings
-from backend.graph.state import PRCriticState, ReviewCandidate
+from backend.graph.state import ReviewAgentInput, ReviewAgentOutput, ReviewCandidate
 from backend.observability.logger import log_start, log_end, log_error
 from backend.utils.resilience import invoke_llm
 
-_llm = ChatGroq(
-    model=settings.generation_model,
-    api_key=settings.groq_api_key,
-    temperature=0.2,
-    max_tokens=1200,
-    timeout=settings.llm_timeout_seconds,
-    max_retries=0,
-)
+_llm = ChatGroq(**settings.models.review.groq_kwargs(api_key=settings.groq_api_key))
 
 _SYSTEM = """You are a senior software engineer performing a precise code review.
 
@@ -57,7 +51,7 @@ def _safe_diff(diff: str, max_chars: int = 4000) -> str:
     return diff[:max_chars] + f"\n\n... [diff truncated at {max_chars} chars for review]"
 
 
-def review_agent(state: PRCriticState) -> dict:
+def review_agent(state: ReviewAgentInput) -> ReviewAgentOutput:
     t0 = time.perf_counter()
     diff = state.get("pr_diff", "")
     ctx  = state.get("retrieved_context", "")

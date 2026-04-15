@@ -5,22 +5,16 @@ Model: mixtral-8x7b (reasoning quality matters for final selection)
 import json
 import re
 import time
+
 from langchain_groq import ChatGroq
 from langchain_core.messages import SystemMessage, HumanMessage
 
 from backend.config import settings
-from backend.graph.state import PRCriticState, ReviewCandidate
+from backend.graph.state import ReviewCandidate, SelectorAgentInput, SelectorAgentOutput
 from backend.observability.logger import log_start, log_end, log_error, log_structured
 from backend.utils.resilience import invoke_llm
 
-_llm = ChatGroq(
-    model=settings.reasoning_model,
-    api_key=settings.groq_api_key,
-    temperature=0.1,
-    max_tokens=256,
-    timeout=settings.llm_timeout_seconds,
-    max_retries=0,
-)
+_llm = ChatGroq(**settings.models.selector.groq_kwargs(api_key=settings.groq_api_key))
 
 _SYSTEM = """Select the best code review from the candidates below.
 Consider overall quality, not just the numeric score.
@@ -57,7 +51,7 @@ def _rerank(candidates: list[ReviewCandidate], diff: str) -> tuple[int, str]:
     return best, "Fallback: highest numeric score"
 
 
-def selector_agent(state: PRCriticState) -> dict:
+def selector_agent(state: SelectorAgentInput) -> SelectorAgentOutput:
     t0 = time.perf_counter()
     candidates = state.get("candidates", [])
     log_start("selector_agent", {

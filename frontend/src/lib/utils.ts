@@ -231,9 +231,9 @@ export function derivePrContext(prUrl: string, trace: TraceEntry[]): PRContext {
   return {
     title:
       repo && prNumber
-        ? `${repo} · PR #${prNumber}`
+        ? `${repo} - PR #${prNumber}`
         : repo
-        ? `${repo} · Pull Request`
+        ? `${repo} - Pull Request`
         : 'Pull Request Review',
     repoLabel,
     language: languageMatch?.[1] ?? 'Unknown',

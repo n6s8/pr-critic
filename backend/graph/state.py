@@ -1,37 +1,50 @@
 """
-Shared LangGraph state. Every agent reads from this dict and
-returns only the keys it writes — LangGraph merges updates.
+Backwards-compatible exports for the shared graph state.
+
+The concrete TypedDict contracts live in backend.graph.contracts so agent
+interfaces can reference narrower input/output views without changing the
+existing graph state keys.
 """
-from typing import TypedDict, Optional
+from backend.graph.contracts import (
+    BranchAgentInput,
+    BranchAgentOutput,
+    CriticAgentInput,
+    CriticAgentOutput,
+    FetchAgentInput,
+    FetchAgentOutput,
+    PRCriticState,
+    PRMetadata,
+    RagAgentInput,
+    RagAgentOutput,
+    RequestContext,
+    ReviewAgentInput,
+    ReviewAgentOutput,
+    ReviewCandidate,
+    SelectorAgentInput,
+    SelectorAgentOutput,
+    TraceEvent,
+    build_initial_state,
+    build_request_context,
+)
 
-
-class ReviewCandidate(TypedDict):
-    review: str            # full review text
-    strategy: str          # "initial" | "security_focus" | "minimal_style"
-    score: float           # 0–10 assigned by Critic Agent
-    score_rationale: str   # one-sentence explanation from Critic
-    issues: list[str]      # list of issues identified by Critic
-
-
-class PRCriticState(TypedDict):
-    # Input
-    pr_url: str
-    pr_diff: str
-    pr_metadata: dict
-
-    # RAG
-    retrieved_context: str
-    retrieval_sources: list[str]
-
-    # Candidates
-    candidates: list[ReviewCandidate]
-
-    # Routing
-    trigger_branch: bool
-
-    # Output
-    best_candidate: Optional[ReviewCandidate]
-    selector_rationale: str
-
-    # Observability
-    trace: list[dict]
+__all__ = [
+    "BranchAgentInput",
+    "BranchAgentOutput",
+    "CriticAgentInput",
+    "CriticAgentOutput",
+    "FetchAgentInput",
+    "FetchAgentOutput",
+    "PRCriticState",
+    "PRMetadata",
+    "RagAgentInput",
+    "RagAgentOutput",
+    "RequestContext",
+    "ReviewAgentInput",
+    "ReviewAgentOutput",
+    "ReviewCandidate",
+    "SelectorAgentInput",
+    "SelectorAgentOutput",
+    "TraceEvent",
+    "build_initial_state",
+    "build_request_context",
+]

@@ -8,7 +8,7 @@ context when the corpus is empty or unavailable.
 import time
 
 from backend.config import settings
-from backend.graph.state import PRCriticState
+from backend.graph.state import RagAgentInput, RagAgentOutput
 from backend.observability.logger import log_end, log_error, log_start, log_structured
 from backend.utils.cache import TTLCache, build_cache_key
 
@@ -117,7 +117,7 @@ _LANGUAGE_RAG_TERMS: dict[str, str] = {
 
 _RAG_CACHE: TTLCache[tuple[str, list[str], str]] = TTLCache(
     "rag_context",
-    settings.rag_cache_ttl_seconds,
+    settings.caches.rag_ttl_seconds,
     max_size=128,
 )
 
@@ -162,7 +162,7 @@ def _retrieve(diff: str, language: str) -> tuple[str, list[str], str]:
     return placeholder, ["placeholder"], "placeholder"
 
 
-def rag_agent(state: PRCriticState) -> dict:
+def rag_agent(state: RagAgentInput) -> RagAgentOutput:
     t0 = time.perf_counter()
     diff = state.get("pr_diff", "")
     lang = state.get("pr_metadata", {}).get("language", "Unknown")

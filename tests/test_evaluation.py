@@ -154,6 +154,7 @@ class TestComputeSummary:
         summary = compute_summary(results)
         assert summary["branching_rate_pct"] == 50.0
         assert summary["branched_count"] == 2
+        assert summary["success_rate_pct"] == 100.0
 
     def test_zero_branching_rate(self):
         results = self._make_results([9.0, 8.5, 7.5])
@@ -209,6 +210,7 @@ class TestComputeSummary:
         summary = compute_summary(all_results)
         assert summary["successful_runs"] == 2
         assert summary["failed_runs"] == 1
+        assert summary["success_rate_pct"] == 66.7
         assert summary["avg_score"] == 7.0  # only the two successful ones
 
     def test_all_runs_failed(self):
@@ -216,6 +218,7 @@ class TestComputeSummary:
                                  0.0, [], "", error="fail")
         summary = compute_summary([failed])
         assert "error" in summary
+        assert summary["success_rate_pct"] == 0.0
 
     def test_min_max_score(self):
         results = self._make_results([3.0, 7.0, 9.5])
@@ -247,6 +250,7 @@ class TestFormatSummaryTable:
         assert "7.5" in table
         assert "100.0%" in table   # 1/1 branching
         assert "security_focus" in table
+        assert "Success rate" in table
 
 
 # ── Evaluation runner integration test ───────────────────────────────────────
@@ -301,7 +305,7 @@ class TestEvaluationRunner:
         summary = json.loads(out.read_text())["summary"]
         for field in ("avg_score", "branching_rate_pct", "score_distribution",
                       "strategy_distribution", "most_common_strategy",
-                      "avg_latency_ms", "category_avg_score"):
+                      "avg_latency_ms", "category_avg_score", "success_rate_pct"):
             assert field in summary, f"Missing summary field: {field}"
 
     def test_category_filter(self, tmp_path):

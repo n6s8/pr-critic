@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import threading
 import time
@@ -25,7 +26,12 @@ class TTLCache(Generic[T]):
         self._ttl_seconds = max(1, ttl_seconds)
         self._max_size = max(1, max_size)
         self._entries: dict[str, _CacheEntry[T]] = {}
-        self._lock = threading.Lock()
+        self._inflight: dict[str, threading.Event] = {}
+        self._lock = threading.RLock()
+
+    @staticmethod
+    def _clone(value: T) -> T:
+        return copy.deepcopy(value)
 
     def _prune(self, now: float) -> None:
         expired = [key for key, entry in self._entries.items() if entry.expires_at <= now]
@@ -43,27 +49,46 @@ class TTLCache(Generic[T]):
             entry = self._entries.get(key)
             if entry is None:
                 return False, None
-            return True, entry.value
+            return True, self._clone(entry.value)
 
     def set(self, key: str, value: T) -> None:
         now = time.monotonic()
         with self._lock:
             self._entries[key] = _CacheEntry(
-                value=value,
+                value=self._clone(value),
                 expires_at=now + self._ttl_seconds,
             )
             self._prune(now)
 
     def get_or_compute(self, key: str, factory: Callable[[], T]) -> tuple[T, bool]:
-        hit, value = self.get(key)
-        if hit:
-            log_structured("INFO", "cache_hit", cache=self._name, key=key[:16])
-            return value, True
+        while True:
+            now = time.monotonic()
+            with self._lock:
+                self._prune(now)
+                entry = self._entries.get(key)
+                if entry is not None:
+                    log_structured("INFO", "cache_hit", cache=self._name, key=key[:16])
+                    return self._clone(entry.value), True
+
+                in_flight = self._inflight.get(key)
+                if in_flight is None:
+                    in_flight = threading.Event()
+                    self._inflight[key] = in_flight
+                    break
+
+            log_structured("INFO", "cache_wait", cache=self._name, key=key[:16])
+            in_flight.wait()
 
         log_structured("INFO", "cache_miss", cache=self._name, key=key[:16])
-        value = factory()
-        self.set(key, value)
-        return value, False
+        try:
+            value = factory()
+            self.set(key, value)
+            return self._clone(value), False
+        finally:
+            with self._lock:
+                event = self._inflight.pop(key, None)
+                if event is not None:
+                    event.set()
 
 
 def build_cache_key(*parts: object) -> str:

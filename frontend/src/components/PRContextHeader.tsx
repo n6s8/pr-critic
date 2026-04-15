@@ -34,7 +34,7 @@ function PRContextHeaderComponent({ prUrl, trace }: Props) {
           <p className="section-label">Pull Request</p>
           <h2 className="mt-2 text-3xl font-semibold text-white">{context.title}</h2>
           <p className="mt-2 text-sm text-slate-400">
-            {context.repoLabel} · imported diff analysis
+            {context.repoLabel} - imported diff analysis
           </p>
         </div>
 

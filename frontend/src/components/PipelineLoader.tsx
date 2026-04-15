@@ -1,9 +1,6 @@
-import { memo, useEffect, useState } from 'react'
+import { memo } from 'react'
 import { cn } from '../lib/utils'
-
-const PIPELINE_STEPS = ['Fetch', 'Rag', 'Review', 'Critic'] as const
-
-type StepState = 'idle' | 'loading' | 'success'
+import type { PipelineStep } from '../types'
 
 function CheckIcon() {
   return (
@@ -23,61 +20,71 @@ function LoaderDot() {
   return <span className="loading-pulse-dot h-2.5 w-2.5 rounded-full bg-emerald-300" />
 }
 
-function PipelineLoaderComponent() {
-  const [activeIndex, setActiveIndex] = useState(0)
+interface Props {
+  steps: PipelineStep[]
+  compact?: boolean
+}
 
-  useEffect(() => {
-    const interval = window.setInterval(() => {
-      setActiveIndex(current =>
-        current >= PIPELINE_STEPS.length - 1 ? current : current + 1
-      )
-    }, 650)
-
-    return () => window.clearInterval(interval)
-  }, [])
-
+function PipelineLoaderComponent({ steps, compact = false }: Props) {
   return (
-    <div className="mt-8 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-      {PIPELINE_STEPS.map((step, index) => {
-        const state: StepState =
-          index < activeIndex ? 'success' : index === activeIndex ? 'loading' : 'idle'
+    <div className={cn('grid gap-3 sm:grid-cols-2 xl:grid-cols-4', !compact && 'mt-8')}>
+      {steps.map((step, index) => {
+        const isLast = index === steps.length - 1
 
         return (
-          <div
-            key={step}
+          <article
+            key={step.id}
             className={cn(
-              'rounded-2xl border px-4 py-4 transition-all duration-300',
-              state === 'success'
+              'pipeline-step relative overflow-hidden rounded-2xl border px-4 py-4 transition-all duration-300',
+              step.status === 'success'
                 ? 'border-emerald-400/30 bg-emerald-500/10 shadow-[0_0_40px_rgba(16,185,129,0.1)]'
-                : state === 'loading'
+                : step.status === 'loading'
                 ? 'border-sky-400/30 bg-sky-500/10 shadow-[0_0_40px_rgba(56,189,248,0.08)]'
                 : 'border-white/10 bg-white/[0.03]'
             )}
           >
-            <div className="flex items-center justify-between">
-              <p className="text-sm font-semibold text-white">{step}</p>
+            {!isLast && (
+              <span className="pointer-events-none absolute -right-2 top-1/2 hidden h-px w-4 -translate-y-1/2 bg-gradient-to-r from-white/20 to-transparent xl:block" />
+            )}
+
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-sm font-semibold text-white">{step.label}</p>
+                {!compact && (
+                  <p className="mt-2 text-xs leading-6 text-slate-400">
+                    {step.description}
+                  </p>
+                )}
+              </div>
+
               <span
                 className={cn(
-                  'inline-flex h-7 w-7 items-center justify-center rounded-full border',
-                  state === 'success'
+                  'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border transition-all duration-300',
+                  step.status === 'success'
                     ? 'border-emerald-400/30 bg-emerald-500/10 text-emerald-300'
-                    : state === 'loading'
+                    : step.status === 'loading'
                     ? 'border-sky-400/30 bg-sky-500/10 text-sky-300'
                     : 'border-white/10 bg-black/10 text-slate-500'
                 )}
               >
-                {state === 'success' ? <CheckIcon /> : state === 'loading' ? <LoaderDot /> : <span className="text-xs">•</span>}
+                {step.status === 'success' ? (
+                  <CheckIcon />
+                ) : step.status === 'loading' ? (
+                  <LoaderDot />
+                ) : (
+                  <span className="text-xs">•</span>
+                )}
               </span>
             </div>
 
             <p className="mt-3 text-xs uppercase tracking-[0.12em] text-slate-500">
-              {state === 'success'
+              {step.status === 'success'
                 ? 'Completed'
-                : state === 'loading'
+                : step.status === 'loading'
                 ? 'Running'
                 : 'Queued'}
             </p>
-          </div>
+          </article>
         )
       })}
     </div>

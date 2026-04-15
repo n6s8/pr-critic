@@ -5,22 +5,16 @@ Selects review strategies based on the detected language.
 All prompts include anti-hallucination instructions.
 """
 import time
+
 from langchain_groq import ChatGroq
 from langchain_core.messages import SystemMessage, HumanMessage
 
 from backend.config import settings
-from backend.graph.state import PRCriticState, ReviewCandidate
+from backend.graph.state import BranchAgentInput, BranchAgentOutput, ReviewCandidate
 from backend.observability.logger import log_start, log_end, log_error
 from backend.utils.resilience import invoke_llm
 
-_llm = ChatGroq(
-    model=settings.generation_model,
-    api_key=settings.groq_api_key,
-    temperature=0.5,
-    max_tokens=1200,
-    timeout=settings.llm_timeout_seconds,
-    max_retries=0,
-)
+_llm = ChatGroq(**settings.models.branch.groq_kwargs(api_key=settings.groq_api_key))
 
 # Base rules prepended to every strategy prompt
 _BASE_RULES = """CRITICAL: Analyze ONLY the code in the provided diff.
@@ -129,7 +123,7 @@ def _safe_diff(diff: str, max_chars: int = 3500) -> str:
     return diff[:max_chars] + "\n\n... [diff truncated for branch review]"
 
 
-def branch_agent(state: PRCriticState) -> dict:
+def branch_agent(state: BranchAgentInput) -> BranchAgentOutput:
     t0 = time.perf_counter()
     diff     = state.get("pr_diff", "")
     ctx      = state.get("retrieved_context", "")
@@ -138,7 +132,7 @@ def branch_agent(state: PRCriticState) -> dict:
     existing = list(state.get("candidates", []))
     trace    = list(state.get("trace", []))
 
-    strategies = _strategies_for_language(lang)[: settings.max_branch_alternatives]
+    strategies = _strategies_for_language(lang)[: settings.thresholds.max_branch_alternatives]
     log_start("branch_agent", {
         "language": lang,
         "n_strategies": len(strategies),

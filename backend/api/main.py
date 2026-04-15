@@ -13,7 +13,6 @@ Success responses keep the same contract used by the frontend:
 """
 from __future__ import annotations
 
-import logging
 import time
 import uuid
 from collections import defaultdict, deque
@@ -29,10 +28,11 @@ from pydantic import BaseModel, Field
 
 from backend.api.issue_extractor import extract_issues
 from backend.config import settings
-from backend.graph.state import PRCriticState
-from backend.graph.workflow import compiled_graph
+from backend.graph.state import build_initial_state, build_request_context
 from backend.mcp.github_mock import MOCK_PRS
+from backend.observability.context import request_context_scope
 from backend.observability.logger import configure_logging, get_logger, log_structured
+from backend.services.review_runtime import run_review_pipeline_async
 
 configure_logging()
 
@@ -227,11 +227,12 @@ def _client_id(request: Request) -> str:
 
 def _rate_limit_exceeded(client_id: str) -> bool:
     now = time.monotonic()
+    rate_limit = settings.rate_limit
     with _rate_limit_lock:
         bucket = _rate_limit_state[client_id]
-        while bucket and now - bucket[0] > settings.rate_limit_window_seconds:
+        while bucket and now - bucket[0] > rate_limit.window_seconds:
             bucket.popleft()
-        if len(bucket) >= settings.rate_limit_requests:
+        if len(bucket) >= rate_limit.requests:
             return True
         bucket.append(now)
         return False
@@ -243,56 +244,51 @@ async def request_context_middleware(request: Request, call_next):
     request.state.request_id = request_id
     client_id = _client_id(request)
 
-    if request.url.path != "/health" and _rate_limit_exceeded(client_id):
-        log_structured(
-            "WARNING",
-            "rate_limit_exceeded",
-            request_id=request_id,
-            path=request.url.path,
-            method=request.method,
-            client_id=client_id,
-        )
-        response = JSONResponse(
-            status_code=429,
-            content=_error_payload(
-                429,
-                "rate_limited",
-                "Too many requests. Please retry shortly.",
-                request_id,
-            ),
-        )
-        response.headers["X-Request-ID"] = request_id
-        return response
-
-    started_at = time.perf_counter()
-    try:
-        response = await call_next(request)
-    except Exception:
-        duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
-        log_structured(
-            "ERROR",
-            "request_failed_uncaught",
-            request_id=request_id,
-            path=request.url.path,
-            method=request.method,
-            client_id=client_id,
-            duration_ms=duration_ms,
-        )
-        raise
-
-    duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
-    log_structured(
-        "INFO",
-        "request_completed",
+    with request_context_scope(
         request_id=request_id,
+        route_path=request.url.path,
         path=request.url.path,
         method=request.method,
         client_id=client_id,
-        status_code=response.status_code,
-        duration_ms=duration_ms,
-    )
-    response.headers["X-Request-ID"] = request_id
-    return response
+    ):
+        if request.url.path != "/health" and _rate_limit_exceeded(client_id):
+            log_structured(
+                "WARNING",
+                "rate_limit_exceeded",
+            )
+            response = JSONResponse(
+                status_code=429,
+                content=_error_payload(
+                    429,
+                    "rate_limited",
+                    "Too many requests. Please retry shortly.",
+                    request_id,
+                ),
+            )
+            response.headers["X-Request-ID"] = request_id
+            return response
+
+        started_at = time.perf_counter()
+        try:
+            response = await call_next(request)
+        except Exception:
+            duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
+            log_structured(
+                "ERROR",
+                "request_failed_uncaught",
+                duration_ms=duration_ms,
+            )
+            raise
+
+        duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
+        log_structured(
+            "INFO",
+            "request_completed",
+            status_code=response.status_code,
+            duration_ms=duration_ms,
+        )
+        response.headers["X-Request-ID"] = request_id
+        return response
 
 
 @app.exception_handler(HTTPException)
@@ -365,24 +361,29 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 
 @app.post("/review", response_model=ReviewResponse)
-async def review_pr(req: ReviewRequest):
-    initial: PRCriticState = {
-        "pr_url": req.pr_url,
-        "pr_diff": "",
-        "pr_metadata": {},
-        "retrieved_context": "",
-        "retrieval_sources": [],
-        "candidates": [],
-        "trigger_branch": False,
-        "best_candidate": None,
-        "selector_rationale": "",
-        "trace": [],
-    }
+async def review_pr(req: ReviewRequest, request: Request):
+    initial = build_initial_state(
+        req.pr_url,
+        request_context=build_request_context(
+            getattr(request.state, "request_id", str(uuid.uuid4())),
+            execution_mode="async_threadpool",
+            route_path=request.url.path,
+        ),
+    )
 
     try:
-        result = compiled_graph.invoke(initial)
+        result = await run_review_pipeline_async(initial)
     except Exception as exc:
-        logging.exception("Pipeline failed for %s", req.pr_url)
+        _api_log.exception(
+            "Pipeline failed for %s",
+            req.pr_url,
+            extra={
+                "extra": {
+                    "request_id": getattr(request.state, "request_id", "unknown"),
+                    "pr_url": req.pr_url,
+                }
+            },
+        )
         raise HTTPException(status_code=500, detail=f"Pipeline error: {exc}") from exc
 
     best = result.get("best_candidate")

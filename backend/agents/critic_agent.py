@@ -6,22 +6,16 @@ Sets trigger_branch=True when score < threshold.
 import json
 import re
 import time
+
 from langchain_groq import ChatGroq
 from langchain_core.messages import SystemMessage, HumanMessage
 
 from backend.config import settings
-from backend.graph.state import PRCriticState
+from backend.graph.state import CriticAgentInput, CriticAgentOutput
 from backend.observability.logger import log_start, log_end, log_error, log_routing
 from backend.utils.resilience import invoke_llm
 
-_llm = ChatGroq(
-    model=settings.reasoning_model,
-    api_key=settings.groq_api_key,
-    temperature=0.1,
-    max_tokens=512,
-    timeout=settings.llm_timeout_seconds,
-    max_retries=0,
-)
+_llm = ChatGroq(**settings.models.critic.groq_kwargs(api_key=settings.groq_api_key))
 
 _SYSTEM = """You are evaluating the quality of a code review.
 Score it 0-10 across these dimensions:
@@ -47,7 +41,7 @@ def _parse(content: str) -> tuple[float, str, list[str]]:
     return score, rationale, []
 
 
-def critic_agent(state: PRCriticState) -> dict:
+def critic_agent(state: CriticAgentInput) -> CriticAgentOutput:
     t0 = time.perf_counter()
     candidates = state.get("candidates", [])
 
@@ -83,7 +77,8 @@ Score this review."""
 
         updated = list(candidates)
         updated[idx] = {**candidate, "score": score, "score_rationale": rationale, "issues": issues}
-        trigger = score < settings.branch_score_threshold
+        threshold = settings.thresholds.branch_score_threshold
+        trigger = score < threshold
 
         ms = (time.perf_counter() - t0) * 1000
         ev = log_end("critic_agent", {
@@ -92,7 +87,7 @@ Score this review."""
         }, ms)
         routing_ev = log_routing(
             "branch" if trigger else "select",
-            f"score={score}, threshold={settings.branch_score_threshold}",
+            f"score={score}, threshold={threshold}",
         )
 
         return {

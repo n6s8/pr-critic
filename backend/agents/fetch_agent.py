@@ -9,12 +9,13 @@ Routes:
 Sets pr_metadata.language via detect_language() when language is Unknown.
 """
 import time
-from backend.graph.state import PRCriticState
+
+from backend.graph.state import FetchAgentInput, FetchAgentOutput
 from backend.mcp.github_mock import get_pr_data
 from backend.observability.logger import log_start, log_end, log_error
 
 
-def fetch_agent(state: PRCriticState) -> dict:
+def fetch_agent(state: FetchAgentInput) -> FetchAgentOutput:
     t0 = time.perf_counter()
     pr_url = state["pr_url"]
     log_start("fetch_agent", {"pr_url": pr_url})

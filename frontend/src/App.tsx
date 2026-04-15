@@ -1,4 +1,5 @@
-import { startTransition, useMemo, useState } from 'react'
+import { startTransition, useCallback, useMemo, useState } from 'react'
+import { DiffPanel } from './components/DiffPanel'
 import { IssuesPanel } from './components/IssuesPanel'
 import { MetricsBar } from './components/MetricsBar'
 import { PipelineLoader } from './components/PipelineLoader'
@@ -9,24 +10,31 @@ import { StrategyList } from './components/StrategyList'
 import { TracePanel } from './components/TracePanel'
 import { useReviewState } from './hooks/useReviewState'
 
-type TabKey = 'review' | 'issues' | 'trace'
+type TabKey = 'review' | 'diff' | 'issues' | 'trace'
 
 const TABS: Array<{ key: TabKey; label: string }> = [
   { key: 'review', label: 'Review' },
+  { key: 'diff', label: 'Diff' },
   { key: 'issues', label: 'Issues' },
   { key: 'trace', label: 'Trace' },
 ]
 
-function LoadingState() {
+function LoadingState({
+  steps,
+  prUrl,
+}: {
+  steps: ReturnType<typeof useReviewState>['pipelineSteps']
+  prUrl: string
+}) {
   return (
     <div className="surface-panel flex min-h-[420px] flex-col justify-center rounded-3xl p-8">
-      <div className="mx-auto w-full max-w-5xl text-center">
+      <div className="mx-auto w-full max-w-6xl text-center">
         <p className="section-label">Pipeline</p>
         <h2 className="mt-3 text-3xl font-semibold text-white">Analyzing PR...</h2>
         <p className="mt-3 text-sm text-slate-400">
-          Running multi-agent pipeline...
+          Simulating the live execution path for {prUrl || 'your pull request'}.
         </p>
-        <PipelineLoader />
+        <PipelineLoader steps={steps} />
       </div>
     </div>
   )
@@ -41,7 +49,7 @@ function EmptyState() {
       </h2>
       <p className="mt-3 max-w-2xl text-sm leading-7 text-slate-400">
         Paste a GitHub diff URL to inspect score, strategies, structured issues,
-        and the full multi-agent timeline in one place.
+        generated diff context, and the full execution timeline in one place.
       </p>
     </div>
   )
@@ -61,6 +69,31 @@ function ErrorState({ message }: { message: string }) {
   )
 }
 
+function ExecutionStrip({
+  steps,
+}: {
+  steps: ReturnType<typeof useReviewState>['pipelineSteps']
+}) {
+  return (
+    <div className="border-b border-white/10 px-6 py-5">
+      <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
+        <div>
+          <p className="section-label">Execution</p>
+          <p className="mt-2 text-sm text-slate-400">
+            Frontend-simulated pipeline matched to the backend response lifecycle.
+          </p>
+        </div>
+        <span className="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-3 py-1 text-xs font-medium text-emerald-200">
+          4 stages completed
+        </span>
+      </div>
+      <div className="mt-4">
+        <PipelineLoader steps={steps} compact />
+      </div>
+    </div>
+  )
+}
+
 export default function App() {
   const [activeTab, setActiveTab] = useState<TabKey>('review')
   const {
@@ -71,9 +104,12 @@ export default function App() {
     error,
     activeStrategyId,
     expandedAgents,
+    pipelineSteps,
+    activeIssueId,
     setPrUrl,
     analyze,
     setActiveStrategy,
+    setActiveIssue,
     toggleAgent,
     expandAll,
     collapseAll,
@@ -92,22 +128,31 @@ export default function App() {
     [activeStrategyId, strategies]
   )
 
-  const handleAnalyze = () => {
+  const handleAnalyze = useCallback(() => {
     const nextUrl = prUrl.trim()
     if (!nextUrl) return
 
     startTransition(() => setActiveTab('review'))
     analyze(nextUrl)
-  }
+  }, [analyze, prUrl])
 
-  const handleSelectStrategy = (id: string) => {
+  const handleSelectStrategy = useCallback((id: string) => {
     setActiveStrategy(id)
     startTransition(() => setActiveTab('review'))
-  }
+  }, [setActiveStrategy])
 
-  const handleTabChange = (tab: TabKey) => {
+  const handleTabChange = useCallback((tab: TabKey) => {
     startTransition(() => setActiveTab(tab))
-  }
+  }, [])
+
+  const handleSelectIssue = useCallback((issueId: string | null) => {
+    setActiveIssue(issueId)
+  }, [setActiveIssue])
+
+  const handleOpenIssueInDiff = useCallback((issueId: string) => {
+    setActiveIssue(issueId)
+    startTransition(() => setActiveTab('diff'))
+  }, [setActiveIssue])
 
   return (
     <div className="h-screen overflow-hidden bg-app text-slate-100">
@@ -155,9 +200,9 @@ export default function App() {
             </div>
           </aside>
 
-          <main className="min-w-0 min-h-0 overflow-y-auto pr-1">
+          <main className="min-h-0 min-w-0 overflow-y-auto pr-1">
             {loading ? (
-              <LoadingState />
+              <LoadingState steps={pipelineSteps} prUrl={lastAnalyzedUrl || prUrl} />
             ) : error ? (
               <ErrorState message={error} />
             ) : !data ? (
@@ -165,6 +210,8 @@ export default function App() {
             ) : (
               <section className="surface-panel min-h-full overflow-hidden rounded-3xl">
                 <PRContextHeader prUrl={lastAnalyzedUrl || prUrl} trace={trace} />
+                <ExecutionStrip steps={pipelineSteps} />
+
                 <div className="flex flex-wrap items-center gap-3 border-b border-white/10 px-6 py-5">
                   {TABS.map(tab => {
                     const count =
@@ -172,6 +219,8 @@ export default function App() {
                         ? issues.length
                         : tab.key === 'trace'
                         ? trace.length
+                        : tab.key === 'diff'
+                        ? undefined
                         : undefined
 
                     return (
@@ -198,7 +247,24 @@ export default function App() {
                     <ReviewPanel strategy={activeStrategy} review={review} />
                   )}
 
-                  {activeTab === 'issues' && <IssuesPanel issues={issues} />}
+                  {activeTab === 'diff' && (
+                    <DiffPanel
+                      review={review}
+                      issues={issues}
+                      trace={trace}
+                      activeIssueId={activeIssueId}
+                      onActiveIssueChange={handleSelectIssue}
+                    />
+                  )}
+
+                  {activeTab === 'issues' && (
+                    <IssuesPanel
+                      issues={issues}
+                      activeIssueId={activeIssueId}
+                      onSelectIssue={handleSelectIssue}
+                      onOpenInDiff={handleOpenIssueInDiff}
+                    />
+                  )}
 
                   {activeTab === 'trace' && (
                     <TracePanel

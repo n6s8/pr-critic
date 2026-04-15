@@ -6,6 +6,7 @@ import {
   useState,
   type ReactNode,
 } from 'react'
+import { getIssueId } from '../lib/diff'
 import type { Issue } from '../types'
 import { cn, getIssueCounts, getIssueSeverityTone } from '../lib/utils'
 
@@ -76,7 +77,7 @@ interface IssueCardProps {
   isActive: boolean
   onSelect: () => void
   onCopy: () => void
-  onJump: () => void
+  onOpenInDiff: () => void
   copied: boolean
 }
 
@@ -85,7 +86,7 @@ const IssueCard = memo(function IssueCard({
   isActive,
   onSelect,
   onCopy,
-  onJump,
+  onOpenInDiff,
   copied,
 }: IssueCardProps) {
   const tone = getIssueSeverityTone(issue.severity)
@@ -130,12 +131,12 @@ const IssueCard = memo(function IssueCard({
           <button
             onClick={event => {
               event.stopPropagation()
-              onJump()
+              onOpenInDiff()
             }}
-            title="Mock jump to file"
+            title="Open in diff viewer"
             className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[11px] text-slate-300 transition hover:bg-white/[0.09]"
           >
-            Jump
+            Open diff
           </button>
         </div>
       </div>
@@ -186,9 +187,17 @@ function sortIssues(issues: Issue[], mode: SortMode) {
 
 interface Props {
   issues: Issue[]
+  activeIssueId: string | null
+  onSelectIssue: (issueId: string | null) => void
+  onOpenInDiff: (issueId: string) => void
 }
 
-function IssuesPanelComponent({ issues }: Props) {
+function IssuesPanelComponent({
+  issues,
+  activeIssueId,
+  onSelectIssue,
+  onOpenInDiff,
+}: Props) {
   const [query, setQuery] = useState('')
   const deferredQuery = useDeferredValue(query)
   const [sortMode, setSortMode] = useState<SortMode>('severity')
@@ -197,9 +206,8 @@ function IssuesPanelComponent({ issues }: Props) {
     major: true,
     minor: true,
   })
-  const [selectedIssueId, setSelectedIssueId] = useState<string | null>(null)
   const [copiedIssueId, setCopiedIssueId] = useState<string | null>(null)
-  const [lastJumpedIssueId, setLastJumpedIssueId] = useState<string | null>(null)
+  const [lastOpenedIssueId, setLastOpenedIssueId] = useState<string | null>(null)
   const [scrollTop, setScrollTop] = useState(0)
 
   const counts = useMemo(() => getIssueCounts(issues), [issues])
@@ -224,23 +232,20 @@ function IssuesPanelComponent({ issues }: Props) {
 
   useEffect(() => {
     if (filteredIssues.length === 0) {
-      setSelectedIssueId(null)
+      onSelectIssue(null)
       return
     }
 
-    setSelectedIssueId(current =>
-      current && filteredIssues.some(issue => `${issue.file}:${issue.line}:${issue.message}` === current)
-        ? current
-        : `${filteredIssues[0].file}:${filteredIssues[0].line}:${filteredIssues[0].message}`
-    )
-  }, [filteredIssues])
+    if (activeIssueId && filteredIssues.some(issue => getIssueId(issue) === activeIssueId)) {
+      return
+    }
+
+    onSelectIssue(getIssueId(filteredIssues[0]))
+  }, [activeIssueId, filteredIssues, onSelectIssue])
 
   const selectedIssue = useMemo(
-    () =>
-      filteredIssues.find(
-        issue => `${issue.file}:${issue.line}:${issue.message}` === selectedIssueId
-      ) ?? null,
-    [filteredIssues, selectedIssueId]
+    () => filteredIssues.find(issue => getIssueId(issue) === activeIssueId) ?? null,
+    [activeIssueId, filteredIssues]
   )
 
   const groupedIssues = useMemo(() => {
@@ -273,7 +278,7 @@ function IssuesPanelComponent({ issues }: Props) {
   }, [filteredIssues, scrollTop])
 
   const handleCopy = async (issue: Issue) => {
-    const issueId = `${issue.file}:${issue.line}:${issue.message}`
+    const issueId = getIssueId(issue)
     const payload = `[${getIssueSeverityTone(issue.severity).toUpperCase()}] ${issue.file}:${issue.line}\n${issue.message}`
 
     try {
@@ -288,22 +293,23 @@ function IssuesPanelComponent({ issues }: Props) {
     }, 1800)
   }
 
-  const handleJump = (issue: Issue) => {
-    const issueId = `${issue.file}:${issue.line}:${issue.message}`
-    setLastJumpedIssueId(issueId)
+  const handleOpenInDiff = (issue: Issue) => {
+    const issueId = getIssueId(issue)
+    setLastOpenedIssueId(issueId)
+    onOpenInDiff(issueId)
   }
 
   const renderIssueCard = (issue: Issue) => {
-    const issueId = `${issue.file}:${issue.line}:${issue.message}`
+    const issueId = getIssueId(issue)
 
     return (
       <IssueCard
         key={issueId}
         issue={issue}
-        isActive={selectedIssueId === issueId}
-        onSelect={() => setSelectedIssueId(issueId)}
+        isActive={activeIssueId === issueId}
+        onSelect={() => onSelectIssue(issueId)}
         onCopy={() => void handleCopy(issue)}
-        onJump={() => handleJump(issue)}
+        onOpenInDiff={() => handleOpenInDiff(issue)}
         copied={copiedIssueId === issueId}
       />
     )
@@ -409,17 +415,17 @@ function IssuesPanelComponent({ issues }: Props) {
                 Copy issue
               </button>
               <button
-                onClick={() => handleJump(selectedIssue)}
+                onClick={() => handleOpenInDiff(selectedIssue)}
                 className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-xs text-slate-200 transition hover:bg-white/[0.09]"
               >
-                Jump to file
+                Open in diff
               </button>
             </div>
           </div>
 
-          {lastJumpedIssueId === `${selectedIssue.file}:${selectedIssue.line}:${selectedIssue.message}` && (
+          {lastOpenedIssueId === getIssueId(selectedIssue) && (
             <p className="mt-3 text-xs text-emerald-300">
-              Mock jump ready: opening source integrations can be wired in next.
+              Diff viewer synced to this issue anchor.
             </p>
           )}
         </div>
@@ -428,7 +434,7 @@ function IssuesPanelComponent({ issues }: Props) {
       {filteredIssues.length === 0 ? (
         <div className="mt-6 rounded-3xl border border-white/10 bg-black/12 p-6">
           <p className="section-label">Issues</p>
-          <p className="mt-3 text-sm text-slate-300">No issues found 🎉</p>
+          <p className="mt-3 text-sm text-slate-300">No issues found.</p>
         </div>
       ) : filteredIssues.length > VIRTUALIZATION_THRESHOLD ? (
         <div className="mt-6">

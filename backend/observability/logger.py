@@ -6,9 +6,14 @@ import logging
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import Lock
 from typing import Any
 
 from backend.config import settings
+from backend.observability.context import get_request_context
+
+
+_WRITE_LOCK = Lock()
 
 
 class JsonFormatter(logging.Formatter):
@@ -62,9 +67,18 @@ configure_logging()
 _log = logging.getLogger("pr_critic")
 
 
-def _write(event: dict) -> dict:
-    with open(_log_file(), "a", encoding="utf-8") as handle:
-        handle.write(json.dumps(event, ensure_ascii=False) + "\n")
+def _merge_request_context(fields: dict[str, Any] | None = None) -> dict[str, Any]:
+    context = get_request_context()
+    merged = dict(context)
+    if fields:
+        merged.update(fields)
+    return merged
+
+
+def _write(event: dict[str, Any]) -> dict[str, Any]:
+    with _WRITE_LOCK:
+        with open(_log_file(), "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(event, ensure_ascii=False) + "\n")
 
     level = logging.ERROR if event["event"] == "error" else logging.INFO
     _log.log(
@@ -73,45 +87,61 @@ def _write(event: dict) -> dict:
         extra={
             "agent": event["agent"],
             "event": event["event"],
+            "request_id": event.get("request_id"),
             "extra": event.get("data", {}),
         },
     )
     return event
 
 
-def record(agent: str, event_type: str, data: dict[str, Any],
-           duration_ms: float | None = None) -> dict:
+def record(
+    agent: str,
+    event_type: str,
+    data: dict[str, Any],
+    duration_ms: float | None = None,
+) -> dict[str, Any]:
+    request_context = get_request_context()
     event: dict[str, Any] = {
         "ts": datetime.now(timezone.utc).isoformat(),
         "agent": agent,
         "event": event_type,
-        "data": data,
+        "data": _merge_request_context(data),
     }
     if duration_ms is not None:
         event["duration_ms"] = round(duration_ms, 2)
+    if request_context.get("request_id"):
+        event["request_id"] = request_context["request_id"]
     return _write(event)
 
 
 def log_structured(level: str, message: str, **fields: Any) -> None:
+    merged = _merge_request_context(fields)
     level_no = getattr(logging, level.upper(), logging.INFO)
-    _log.log(level_no, message, extra={"extra": fields})
+    _log.log(
+        level_no,
+        message,
+        extra={
+            "request_id": merged.get("request_id"),
+            "extra": merged,
+        },
+    )
 
 
 def get_logger(name: str) -> logging.Logger:
     return logging.getLogger(name)
 
 
-def log_start(agent: str, inputs: dict) -> dict:
+def log_start(agent: str, inputs: dict[str, Any]) -> dict[str, Any]:
     return record(agent, "start", inputs)
 
 
-def log_end(agent: str, outputs: dict, duration_ms: float) -> dict:
+def log_end(agent: str, outputs: dict[str, Any], duration_ms: float) -> dict[str, Any]:
     return record(agent, "end", outputs, duration_ms)
 
 
-def log_error(agent: str, error: str) -> dict:
+def log_error(agent: str, error: str) -> dict[str, Any]:
     return record(agent, "error", {"error": error})
 
 
-def log_routing(decision: str, reason: str) -> dict:
+def log_routing(decision: str, reason: str) -> dict[str, Any]:
     return record("router", "routing_decision", {"decision": decision, "reason": reason})
