@@ -1,4 +1,5 @@
 import { startTransition, useCallback, useMemo, useState } from 'react'
+import { Analytics } from '@vercel/analytics/react'
 import { DeveloperFooter } from './components/DeveloperFooter'
 import { DiffPanel } from './components/DiffPanel'
 import { IssuesPanel } from './components/IssuesPanel'
@@ -345,6 +346,7 @@ export default function App() {
           ) : null}
         </main>
       </div>
+      <Analytics />
     </div>
   )
 }
