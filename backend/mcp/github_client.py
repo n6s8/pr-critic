@@ -8,7 +8,7 @@ from dataclasses import dataclass
 import httpx
 
 from backend.config import settings
-from backend.observability.logger import record
+from backend.observability.logger import record, log_structured
 from backend.utils.cache import TTLCache, build_cache_key
 from backend.utils.resilience import is_retryable_github_error, retry_call
 
@@ -98,6 +98,12 @@ def _headers(token: str | None = None) -> dict[str, str]:
     }
     if token:
         headers["Authorization"] = f"Bearer {token}"
+    else:
+        log_structured(
+            "WARNING",
+            "github_api_no_token",
+            message="GitHub API request without token - unauthenticated requests have lower rate limits",
+        )
     return headers
 
 
@@ -179,7 +185,7 @@ def get_real_pr_data(pr_url: str, token: str | None = None) -> PRData:
 
     Raises:
         ValueError: URL is not a valid GitHub PR URL.
-        httpx.HTTPStatusError: GitHub API returned an error.
+        httpx.HTTPStatusError: GitHub API returned an error (including 403 rate limit).
     """
     ref = parse_github_url(pr_url)
     if ref is None:
@@ -190,11 +196,34 @@ def get_real_pr_data(pr_url: str, token: str | None = None) -> PRData:
 
     def _load() -> PRData:
         started_at = time.perf_counter()
-        meta = _fetch_pr_meta(ref, token)
-        files = _fetch_files(ref, token)
-        file_names = [item["filename"] for item in files if "filename" in item]
-        language = detect_language(file_names)
-        diff = _fetch_diff(ref, token)
+        
+        try:
+            meta = _fetch_pr_meta(ref, token)
+            files = _fetch_files(ref, token)
+            file_names = [item["filename"] for item in files if "filename" in item]
+            language = detect_language(file_names)
+            diff = _fetch_diff(ref, token)
+        except httpx.HTTPStatusError as exc:
+            # Handle GitHub rate limit (403) with clear error message
+            if exc.response and exc.response.status_code == 403:
+                remaining = exc.response.headers.get("x-ratelimit-remaining", "0")
+                reset_time = exc.response.headers.get("x-ratelimit-reset", "unknown")
+                log_structured(
+                    "ERROR",
+                    "github_rate_limit_exceeded",
+                    status_code=403,
+                    url=str(exc.request.url) if exc.request else "unknown",
+                    remaining=remaining,
+                    reset_time=reset_time,
+                    has_token=bool(token),
+                )
+                raise ValueError(
+                    f"GitHub API rate limit exceeded (403). "
+                    f"Remaining requests: {remaining}. "
+                    f"Please ensure GITHUB_TOKEN is set for higher rate limits."
+                ) from exc
+            # Re-raise other HTTP errors
+            raise
 
         if len(diff) > MAX_DIFF_CHARS:
             omitted = len(diff) - MAX_DIFF_CHARS

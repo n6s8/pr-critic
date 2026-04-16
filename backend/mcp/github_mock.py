@@ -133,6 +133,27 @@ def get_pr_data(pr_url: str) -> PRData:
 
             token = getattr(settings, "github_token", None) or None
             return get_real_pr_data(pr_url, token=token)
+        except ValueError as exc:
+            # Handle rate limit errors gracefully with clear message
+            error_msg = str(exc)
+            log_structured(
+                "ERROR",
+                "github_fetch_error",
+                pr_url=pr_url,
+                error_type=type(exc).__name__,
+                error=error_msg,
+                is_rate_limit="rate limit exceeded" in error_msg.lower(),
+            )
+            return PRData(
+                url=pr_url,
+                title="GitHub fetch error",
+                author="system",
+                base_branch="main",
+                head_branch="feature",
+                files_changed=[],
+                language="Unknown",
+                diff=f"Error: {error_msg}\n\nPlease check your GITHUB_TOKEN environment variable.",
+            )
         except Exception as exc:
             log_structured(
                 "ERROR",

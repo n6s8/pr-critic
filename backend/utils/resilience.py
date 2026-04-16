@@ -14,7 +14,9 @@ T = TypeVar("T")
 def is_retryable_github_error(exc: Exception) -> bool:
     if isinstance(exc, httpx.HTTPStatusError):
         status_code = exc.response.status_code if exc.response is not None else None
-        return status_code in {408, 409, 425, 429} or (status_code is not None and status_code >= 500)
+        # 403 = rate limit exceeded, 429 = too many requests
+        # Both are retryable with backoff
+        return status_code in {403, 408, 409, 425, 429} or (status_code is not None and status_code >= 500)
 
     return isinstance(
         exc,
