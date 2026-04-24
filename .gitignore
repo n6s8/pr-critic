@@ -3,21 +3,17 @@ __pycache__/
 *.pyc
 *.pyo
 .pytest_cache/
+.pytest_tmp/
+.coverage
+coverage.xml
 *.egg-info/
 dist/
 build/
+frontend/dist/
+node_modules/
+frontend/node_modules/
 data/chroma/
 data/tfidf_index.json
+evaluation/results.json
 logs/
 .DS_Store
-<<<<<<< HEAD
-
-node_modules/
-frontend/node_modules/
-.env
-dist/
-build/
-=======
-node_modules/
-frontend/node_modules/
->>>>>>> aa5318b (fix: remove node_modules from repo)

@@ -1,11 +1,11 @@
 """
-TF-IDF retriever — fully offline, no model downloads required.
+TF-IDF retriever that works fully offline.
 
-Works identically in CI, local dev, and sandboxed environments.
-For production with internet access, swap to vector_store.py
-(ChromaDB + ONNX embeddings) — the retrieve_context() signature
-is identical.
+The retriever exposes both prompt-ready context text and structured retrieval
+hits so the backend can make grounding visible to the frontend.
 """
+from __future__ import annotations
+
 import json
 import math
 import re
@@ -13,8 +13,6 @@ import string
 from collections import Counter
 from pathlib import Path
 from typing import Optional
-
-from backend.config import settings
 
 _INDEX_PATH = Path("data/tfidf_index.json")
 CHUNK_SIZE = 400
@@ -31,17 +29,18 @@ _STOPWORDS = {
 
 def _tokenize(text: str) -> list[str]:
     text = text.lower().translate(str.maketrans("", "", string.punctuation))
-    return [t for t in text.split() if t not in _STOPWORDS and len(t) > 2]
+    return [token for token in text.split() if token not in _STOPWORDS and len(token) > 2]
 
 
 def _chunk_text(text: str) -> list[str]:
-    chunks, start = [], 0
+    chunks: list[str] = []
+    start = 0
     while start < len(text):
         end = start + CHUNK_SIZE
         if end < len(text):
-            nl = text.rfind("\n", start + CHUNK_SIZE // 2, end)
-            if nl != -1:
-                end = nl
+            newline = text.rfind("\n", start + CHUNK_SIZE // 2, end)
+            if newline != -1:
+                end = newline
         chunk = text[start:end].strip()
         if chunk:
             chunks.append(chunk)
@@ -56,16 +55,16 @@ def _parse_file(path: Path) -> list[dict]:
         if line.startswith("Category:"):
             category = line.split(":", 1)[1].strip()
 
-    docs = []
-    for i, section in enumerate(re.split(r"\n---\n", content)):
+    docs: list[dict] = []
+    for section_index, section in enumerate(re.split(r"\n---\n", content)):
         section = section.strip()
         if not section:
             continue
-        m = re.match(r"SECTION:\s*(.+)\n", section)
-        section_name = m.group(1).strip() if m else "general"
-        for j, chunk in enumerate(_chunk_text(section)):
+        match = re.match(r"SECTION:\s*(.+)\n", section)
+        section_name = match.group(1).strip() if match else "general"
+        for chunk_index, chunk in enumerate(_chunk_text(section)):
             docs.append({
-                "id": f"{path.stem}_{i:03d}_{j:03d}",
+                "id": f"{path.stem}_{section_index:03d}_{chunk_index:03d}",
                 "text": chunk,
                 "source": path.stem,
                 "category": category,
@@ -74,31 +73,32 @@ def _parse_file(path: Path) -> list[dict]:
     return docs
 
 
-def build_corpus(corpus_dir: str = "data/corpus",
-                 force_rebuild: bool = False) -> int:
+def build_corpus(corpus_dir: str = "data/corpus", force_rebuild: bool = False) -> int:
     _INDEX_PATH.parent.mkdir(parents=True, exist_ok=True)
     if not force_rebuild and _INDEX_PATH.exists():
-        return len(json.loads(_INDEX_PATH.read_text())["docs"])
+        return len(json.loads(_INDEX_PATH.read_text(encoding="utf-8"))["docs"])
 
     all_docs: list[dict] = []
-    for f in sorted(Path(corpus_dir).glob("*.txt")):
-        all_docs.extend(_parse_file(f))
+    for corpus_file in sorted(Path(corpus_dir).glob("*.txt")):
+        all_docs.extend(_parse_file(corpus_file))
 
     if not all_docs:
         raise ValueError(f"No .txt files found in {corpus_dir}")
 
-    # Build TF-IDF index
-    tf: dict[str, Counter] = {d["id"]: Counter(_tokenize(d["text"])) for d in all_docs}
-    df: Counter = Counter()
-    for counts in tf.values():
+    term_frequencies: dict[str, Counter] = {
+        doc["id"]: Counter(_tokenize(doc["text"])) for doc in all_docs
+    }
+    document_frequency: Counter = Counter()
+    for counts in term_frequencies.values():
         for term in counts:
-            df[term] += 1
-    N = len(all_docs)
+            document_frequency[term] += 1
+
+    total_docs = len(all_docs)
     index: dict[str, dict[str, float]] = {}
     for doc in all_docs:
-        total = sum(tf[doc["id"]].values()) or 1
-        for term, count in tf[doc["id"]].items():
-            tfidf = (count / total) * (math.log((N + 1) / (df[term] + 1)) + 1)
+        total_terms = sum(term_frequencies[doc["id"]].values()) or 1
+        for term, count in term_frequencies[doc["id"]].items():
+            tfidf = (count / total_terms) * (math.log((total_docs + 1) / (document_frequency[term] + 1)) + 1)
             index.setdefault(term, {})[doc["id"]] = tfidf
 
     _INDEX_PATH.write_text(
@@ -115,15 +115,18 @@ def _load() -> tuple[list[dict], dict]:
     return data["docs"], data["index"]
 
 
-def retrieve_context(query: str, top_k: int = 5,
-                     category_filter: Optional[str] = None) -> tuple[str, list[str]]:
+def retrieve_hits(
+    query: str,
+    top_k: int = 5,
+    category_filter: Optional[str] = None,
+) -> list[dict]:
     docs, index = _load()
     if not docs:
-        return "", []
+        return []
 
     terms = _tokenize(query)
     if not terms:
-        return "", []
+        return []
 
     scores: Counter = Counter()
     for term in terms:
@@ -131,22 +134,42 @@ def retrieve_context(query: str, top_k: int = 5,
             for doc_id, score in index[term].items():
                 scores[doc_id] += score
 
-    doc_map = {d["id"]: d for d in docs}
+    doc_map = {doc["id"]: doc for doc in docs}
     if category_filter:
         scores = Counter({
-            k: v for k, v in scores.items()
-            if doc_map.get(k, {}).get("category") == category_filter
+            doc_id: score
+            for doc_id, score in scores.items()
+            if doc_map.get(doc_id, {}).get("category") == category_filter
         })
 
-    parts, seen = [], set()
+    hits: list[dict] = []
     for doc_id, _ in scores.most_common(top_k):
         doc = doc_map[doc_id]
-        rel = round(scores[doc_id], 3)
-        label = f"[{doc['source'].upper()} — {doc['section']}] (relevance: {rel})"
-        parts.append(f"{label}\n{doc['text']}")
-        seen.add(doc["source"])
+        hits.append({
+            "source": doc["source"],
+            "section": doc["section"],
+            "text": doc["text"],
+            "relevance": round(scores[doc_id], 3),
+        })
 
-    return "\n\n---\n\n".join(parts), sorted(seen)
+    return hits
+
+
+def retrieve_context(
+    query: str,
+    top_k: int = 5,
+    category_filter: Optional[str] = None,
+) -> tuple[str, list[str], list[dict]]:
+    hits = retrieve_hits(query, top_k=top_k, category_filter=category_filter)
+    if not hits:
+        return "", [], []
+
+    parts = [
+        f"[{hit['source'].upper()} - {hit['section']}] (relevance: {hit['relevance']})\n{hit['text']}"
+        for hit in hits
+    ]
+    sources = sorted({hit["source"] for hit in hits})
+    return "\n\n---\n\n".join(parts), sources, hits
 
 
 def get_collection_stats() -> dict:

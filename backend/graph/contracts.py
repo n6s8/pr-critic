@@ -1,9 +1,9 @@
 """
 Typed contracts for the PR Critic pipeline.
 
-The graph still passes a shared mutable state mapping between agents, but these
+The graph passes a shared mutable state mapping between agents. These
 TypedDict views make each agent's input/output boundary explicit and keep the
-public API payload unchanged.
+backend state aligned with the API contract.
 """
 from __future__ import annotations
 
@@ -46,11 +46,24 @@ class PRMetadata(TypedDict, total=False):
 
 
 class ReviewCandidate(TypedDict):
+    id: str
     review: str
     strategy: str
+
+
+class CandidateScore(TypedDict):
+    candidate_index: int
+    strategy: str
     score: float
-    score_rationale: str
-    issues: list[str]
+    rationale: str
+    issues_identified: list[str]
+
+
+class RetrievalHit(TypedDict):
+    source: str
+    section: str
+    snippet: str
+    relevance: float
 
 
 class PRCriticState(TypedDict):
@@ -59,10 +72,13 @@ class PRCriticState(TypedDict):
     pr_metadata: PRMetadata
     retrieved_context: str
     retrieval_sources: list[str]
+    retrieval_hits: list[RetrievalHit]
     candidates: list[ReviewCandidate]
-    trigger_branch: bool
-    best_candidate: ReviewCandidate | None
-    selector_rationale: str
+    scores: list[CandidateScore]
+    branch_taken: bool
+    branch_improvement: float | None
+    selected_index: int | None
+    selector_reason: str
     trace: list[TraceEvent]
     request_context: NotRequired[RequestContext]
 
@@ -89,6 +105,7 @@ class RagAgentInput(TypedDict):
 class RagAgentOutput(TypedDict):
     retrieved_context: str
     retrieval_sources: list[str]
+    retrieval_hits: list[RetrievalHit]
     trace: list[TraceEvent]
 
 
@@ -97,6 +114,7 @@ class ReviewAgentInput(TypedDict):
     pr_metadata: PRMetadata
     retrieved_context: str
     retrieval_sources: list[str]
+    retrieval_hits: list[RetrievalHit]
     candidates: list[ReviewCandidate]
     trace: list[TraceEvent]
     request_context: NotRequired[RequestContext]
@@ -110,13 +128,14 @@ class ReviewAgentOutput(TypedDict):
 class CriticAgentInput(TypedDict):
     pr_diff: str
     candidates: list[ReviewCandidate]
+    scores: list[CandidateScore]
     trace: list[TraceEvent]
     request_context: NotRequired[RequestContext]
 
 
 class CriticAgentOutput(TypedDict):
-    candidates: NotRequired[list[ReviewCandidate]]
-    trigger_branch: bool
+    scores: list[CandidateScore]
+    branch_taken: NotRequired[bool]
     trace: list[TraceEvent]
 
 
@@ -124,6 +143,7 @@ class BranchAgentInput(TypedDict):
     pr_diff: str
     pr_metadata: PRMetadata
     retrieved_context: str
+    scores: list[CandidateScore]
     candidates: list[ReviewCandidate]
     trace: list[TraceEvent]
     request_context: NotRequired[RequestContext]
@@ -137,13 +157,16 @@ class BranchAgentOutput(TypedDict):
 class SelectorAgentInput(TypedDict):
     pr_diff: str
     candidates: list[ReviewCandidate]
+    scores: list[CandidateScore]
+    branch_taken: bool
     trace: list[TraceEvent]
     request_context: NotRequired[RequestContext]
 
 
 class SelectorAgentOutput(TypedDict):
-    best_candidate: ReviewCandidate | None
-    selector_rationale: str
+    selected_index: int | None
+    selector_reason: str
+    branch_improvement: float | None
     trace: list[TraceEvent]
 
 
@@ -172,10 +195,13 @@ def build_initial_state(
         "pr_metadata": {},
         "retrieved_context": "",
         "retrieval_sources": [],
+        "retrieval_hits": [],
         "candidates": [],
-        "trigger_branch": False,
-        "best_candidate": None,
-        "selector_rationale": "",
+        "scores": [],
+        "branch_taken": False,
+        "branch_improvement": None,
+        "selected_index": None,
+        "selector_reason": "",
         "trace": [],
     }
     if request_context is not None:

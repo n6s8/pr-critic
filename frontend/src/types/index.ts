@@ -1,25 +1,7 @@
-export type Severity = 'critical' | 'major' | 'minor' | 'warning' | 'info'
-export type LogLevel = 'INFO' | 'WARN' | 'ERROR' | 'DEBUG' | 'SUCCESS'
-export type PipelineStepId = 'fetch' | 'rag' | 'review' | 'critic'
-export type PipelineStepStatus = 'pending' | 'loading' | 'success'
+export type Severity = 'critical' | 'warning' | 'info'
+export type TraceStatus = 'started' | 'completed' | 'warning' | 'error' | 'routing'
 export type DiffLineType = 'context' | 'added' | 'removed' | 'meta'
-export type DiffFileStatus = 'modified' | 'added' | 'deleted' | 'renamed' | 'generated'
-export type DiffSource = 'review' | 'generated'
-
-export interface TraceFilters {
-  INFO: boolean
-  WARN: boolean
-  ERROR: boolean
-  DEBUG: boolean
-  SUCCESS: boolean
-}
-
-export interface Strategy {
-  id: string
-  name: string
-  score: number
-  description: string
-}
+export type DiffFileStatus = 'modified' | 'added' | 'deleted' | 'renamed'
 
 export interface Issue {
   severity: Severity
@@ -28,27 +10,65 @@ export interface Issue {
   message: string
 }
 
-export interface PipelineStep {
-  id: PipelineStepId
-  label: string
-  description: string
-  status: PipelineStepStatus
+export interface RetrievalHit {
+  source: string
+  section: string
+  snippet: string
+  relevance: number
+}
+
+export interface Candidate {
+  index: number
+  id: string
+  strategy: string
+  review: string
+  score: number
+  score_rationale: string
+  critic_issues: string[]
+}
+
+export interface PRMetadata {
+  title: string
+  author: string
+  base_branch: string
+  head_branch: string
+  language: string
+  files_changed: string[]
+  pr_url: string
 }
 
 export interface TraceEntry {
   agent: string
-  level: LogLevel
-  message: string
+  event: string
+  status: TraceStatus
   timestamp: string
+  duration_ms: number | null
+  data: Record<string, unknown>
 }
 
 export interface AnalyzeResponse {
+  language: string
+  files_changed: string[]
+  diff_size: number
+  pr_metadata: PRMetadata
+  diff: string
+  retrieval: RetrievalHit[]
+  candidates: Candidate[]
+  selected_index: number
+  selected_review: Candidate
+  selector_reason: string
+  branch_taken: boolean
+  branch_improvement: number | null
   score: number
-  strategies: Strategy[]
-  selected_strategy: string
-  review: string
   issues: Issue[]
   trace: TraceEntry[]
+}
+
+export interface PipelineStep {
+  id: string
+  label: string
+  description: string
+  status: TraceStatus
 }
 
 export interface DiffLine {
@@ -72,7 +92,6 @@ export interface DiffFile {
   oldPath: string | null
   newPath: string | null
   status: DiffFileStatus
-  source: DiffSource
   additions: number
   deletions: number
   hunks: DiffHunk[]
@@ -85,11 +104,7 @@ export interface ReviewState {
   data: AnalyzeResponse | null
   loading: boolean
   error: string | null
-  activeStrategyId: string
-  compareStrategyIds: string[]
-  selectedPipelineAgent: string | null
-  traceFilters: TraceFilters
+  activeCandidateIndex: number | null
   expandedAgents: Record<string, boolean>
-  pipelineSteps: PipelineStep[]
   activeIssueId: string | null
 }

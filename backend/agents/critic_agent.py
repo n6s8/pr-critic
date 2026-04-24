@@ -1,104 +1,158 @@
 """
-Critic Agent — scores a review 0-10.
-Model: mixtral-8x7b (stronger reasoning for evaluation)
-Sets trigger_branch=True when score < threshold.
+Critic agents score review candidates and decide whether the branch path is
+necessary after the initial review.
 """
+from __future__ import annotations
+
 import json
 import re
 import time
 
+from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_groq import ChatGroq
-from langchain_core.messages import SystemMessage, HumanMessage
 
 from backend.config import settings
-from backend.graph.state import CriticAgentInput, CriticAgentOutput
-from backend.observability.logger import log_start, log_end, log_error, log_routing
+from backend.graph.state import CandidateScore, CriticAgentInput, CriticAgentOutput
+from backend.observability.logger import log_end, log_error, log_routing, log_start
+from backend.utils.diff import prepare_diff_for_prompt
 from backend.utils.resilience import invoke_llm
 
 _llm = ChatGroq(**settings.models.critic.groq_kwargs(api_key=settings.groq_api_key))
 
 _SYSTEM = """You are evaluating the quality of a code review.
-Score it 0-10 across these dimensions:
-- Usefulness (0-3): Are suggestions actionable and specific?
-- Coverage (0-3): Are the important issues addressed?
-- False positives (0-2): Does it avoid flagging non-issues?
-- Clarity (0-2): Is it clearly written?
 
-Respond ONLY with valid JSON, no extra text:
-{"score": <float 0-10>, "rationale": "<one sentence>", "issues_identified": ["<issue1>"]}"""
+Score the review from 0 to 10 across:
+- Usefulness
+- Coverage
+- False-positive control
+- Clarity
+
+Respond only with valid JSON:
+{"score": 0.0, "rationale": "one sentence", "issues_identified": ["issue"]}"""
 
 
 def _parse(content: str) -> tuple[float, str, list[str]]:
     try:
-        d = json.loads(content.strip())
-        return float(d.get("score", 5.0)), d.get("rationale", ""), d.get("issues_identified", [])
-    except (json.JSONDecodeError, ValueError):
+        data = json.loads(content.strip())
+        return (
+            float(data.get("score", 5.0)),
+            str(data.get("rationale", "")),
+            [str(issue) for issue in data.get("issues_identified", [])],
+        )
+    except (json.JSONDecodeError, ValueError, TypeError):
         pass
-    m = re.search(r'"score"\s*:\s*(\d+(?:\.\d+)?)', content)
-    score = float(m.group(1)) if m else 5.0
-    mr = re.search(r'"rationale"\s*:\s*"([^"]+)"', content)
-    rationale = mr.group(1) if mr else ""
+
+    score_match = re.search(r'"score"\s*:\s*(\d+(?:\.\d+)?)', content)
+    rationale_match = re.search(r'"rationale"\s*:\s*"([^"]+)"', content)
+    score = float(score_match.group(1)) if score_match else 5.0
+    rationale = rationale_match.group(1) if rationale_match else ""
     return score, rationale, []
 
 
-def critic_agent(state: CriticAgentInput) -> CriticAgentOutput:
-    t0 = time.perf_counter()
-    candidates = state.get("candidates", [])
+def _pending_indexes(candidate_count: int, scores: list[CandidateScore]) -> list[int]:
+    scored_indexes = {score["candidate_index"] for score in scores}
+    return [index for index in range(candidate_count) if index not in scored_indexes]
 
-    if not candidates:
-        ev = log_error("critic_agent", "No candidates to evaluate")
-        return {"trigger_branch": False, "trace": state.get("trace", []) + [ev]}
 
-    idx = len(candidates) - 1
-    candidate = candidates[idx]
-    log_start("critic_agent", {
-        "strategy": candidate["strategy"],
-        "review_length": len(candidate["review"]),
-    })
-
-    try:
-        human = f"""## PR Diff
+def _score_candidate(index: int, review: str, strategy: str, diff: str) -> CandidateScore:
+    diff_excerpt = prepare_diff_for_prompt(diff, max_chars=2500).content
+    prompt = f"""## Diff
 ```diff
-{state.get('pr_diff', '')[:2000]}
+{diff_excerpt}
 ```
 
-## Review to Evaluate
-{candidate['review']}
+## Review To Evaluate
+{review}
 
-Score this review."""
+Return the JSON score."""
 
-        resp = invoke_llm(
-            _llm,
-            [SystemMessage(content=_SYSTEM), HumanMessage(content=human)],
-            agent="critic_agent",
-        )
-        score, rationale, issues = _parse(resp.content)
-        score = max(0.0, min(10.0, score))
+    response = invoke_llm(
+        _llm,
+        [SystemMessage(content=_SYSTEM), HumanMessage(content=prompt)],
+        agent="critic_agent",
+    )
+    score, rationale, issues_identified = _parse(response.content)
+    return {
+        "candidate_index": index,
+        "strategy": strategy,
+        "score": max(0.0, min(10.0, score)),
+        "rationale": rationale,
+        "issues_identified": issues_identified,
+    }
 
-        updated = list(candidates)
-        updated[idx] = {**candidate, "score": score, "score_rationale": rationale, "issues": issues}
+
+def _run_critic(state: CriticAgentInput, *, set_branch_taken: bool) -> CriticAgentOutput:
+    started_at = time.perf_counter()
+    candidates = list(state.get("candidates", []))
+    scores = list(state.get("scores", []))
+    trace = list(state.get("trace", []))
+    pending_indexes = _pending_indexes(len(candidates), scores)
+    start_event = log_start(
+        "critic_agent",
+        {
+            "candidate_count": len(candidates),
+            "pending_indexes": pending_indexes,
+        },
+    )
+
+    if not candidates:
+        error_event = log_error("critic_agent", "No candidates to evaluate")
+        result: CriticAgentOutput = {"scores": scores, "trace": trace + [start_event, error_event]}
+        if set_branch_taken:
+            result["branch_taken"] = False
+        return result
+
+    new_scores: list[CandidateScore] = []
+    for index in pending_indexes:
+        candidate = candidates[index]
+        try:
+            new_scores.append(
+                _score_candidate(index, candidate["review"], candidate["strategy"], state.get("pr_diff", ""))
+            )
+        except Exception as exc:
+            trace.append(log_error("critic_agent", f"Failed to score candidate {index}: {exc}"))
+            new_scores.append({
+                "candidate_index": index,
+                "strategy": candidate["strategy"],
+                "score": 0.0,
+                "rationale": f"Critic failed: {exc}",
+                "issues_identified": [],
+            })
+
+    updated_scores = sorted(scores + new_scores, key=lambda item: item["candidate_index"])
+    branch_taken = state.get("branch_taken", False)
+    routing_event = None
+    if set_branch_taken:
         threshold = settings.thresholds.branch_score_threshold
-        trigger = score < threshold
-
-        ms = (time.perf_counter() - t0) * 1000
-        ev = log_end("critic_agent", {
-            "strategy": candidate["strategy"], "score": score,
-            "rationale": rationale, "trigger_branch": trigger,
-        }, ms)
-        routing_ev = log_routing(
-            "branch" if trigger else "select",
-            f"score={score}, threshold={threshold}",
+        initial_score = next((score for score in updated_scores if score["candidate_index"] == 0), None)
+        branch_taken = bool(initial_score and initial_score["score"] < threshold)
+        routing_event = log_routing(
+            "branch" if branch_taken else "select",
+            f"score={initial_score['score'] if initial_score else 'n/a'}, threshold={threshold}",
         )
 
-        return {
-            "candidates": updated,
-            "trigger_branch": trigger,
-            "trace": state.get("trace", []) + [ev, routing_ev],
-        }
+    end_event = log_end(
+        "critic_agent",
+        {
+            "scored_indexes": [score["candidate_index"] for score in new_scores],
+            "scores": {score["candidate_index"]: score["score"] for score in updated_scores},
+            "branch_taken": branch_taken,
+        },
+        (time.perf_counter() - started_at) * 1000,
+    )
+    next_trace = trace + [start_event, end_event]
+    if routing_event is not None:
+        next_trace.append(routing_event)
 
-    except Exception as exc:
-        ev = log_error("critic_agent", str(exc))
-        return {
-            "trigger_branch": False,
-            "trace": state.get("trace", []) + [ev],
-        }
+    result: CriticAgentOutput = {"scores": updated_scores, "trace": next_trace}
+    if set_branch_taken:
+        result["branch_taken"] = branch_taken
+    return result
+
+
+def critic_agent(state: CriticAgentInput) -> CriticAgentOutput:
+    return _run_critic(state, set_branch_taken=True)
+
+
+def branch_critic_agent(state: CriticAgentInput) -> CriticAgentOutput:
+    return _run_critic(state, set_branch_taken=False)

@@ -1,4 +1,7 @@
-"""PR data provider and smart router for mock and GitHub-backed inputs."""
+"""PR data provider and smart router for mock, evaluation, and GitHub inputs."""
+from __future__ import annotations
+
+import re
 from dataclasses import dataclass
 
 from backend.observability.logger import log_structured
@@ -115,16 +118,85 @@ MOCK_PRS: dict[str, PRData] = {
     ),
 }
 
+_DIFF_FILE_RE = re.compile(r"^diff --git a/(.+?) b/(.+)$", re.MULTILINE)
+
+
+def _extract_files_from_diff(diff: str) -> list[str]:
+    files: list[str] = []
+    for _, new_path in _DIFF_FILE_RE.findall(diff):
+        normalized = new_path.strip()
+        if normalized not in files:
+            files.append(normalized)
+    return files
+
+
+def _detect_language(files_changed: list[str]) -> str:
+    if not files_changed:
+        return "Unknown"
+    try:
+        from backend.mcp.github_client import detect_language
+
+        return detect_language(files_changed)
+    except Exception:
+        return "Unknown"
+
+
+def _evaluation_pr(pr_url: str) -> PRData | None:
+    if not pr_url.startswith("eval://"):
+        return None
+
+    try:
+        from evaluation.scenarios import SCENARIOS
+    except Exception:
+        return None
+
+    scenario = next((item for item in SCENARIOS if item["id"] == pr_url), None)
+    if scenario is None:
+        return None
+
+    files_changed = _extract_files_from_diff(scenario["diff"])
+    language = _detect_language(files_changed)
+    return PRData(
+        url=pr_url,
+        title=scenario["name"],
+        author="eval_bot",
+        base_branch="main",
+        head_branch="evaluation",
+        files_changed=files_changed,
+        language=language,
+        diff=scenario["diff"],
+    )
+
+
+def _raw_diff_pr(pr_url: str) -> PRData:
+    files_changed = _extract_files_from_diff(pr_url)
+    language = _detect_language(files_changed)
+    return PRData(
+        url=pr_url,
+        title="Custom PR",
+        author="unknown",
+        base_branch="main",
+        head_branch="feature",
+        files_changed=files_changed,
+        language=language if language != "Unknown" else "Unknown",
+        diff=pr_url,
+    )
+
 
 def get_pr_data(pr_url: str) -> PRData:
     """
-    Smart router:
+    Router:
       1. mock:// -> built-in mock data
-      2. github.com PR URL -> real GitHub API
-      3. anything else -> raw diff fallback
+      2. eval:// -> evaluation scenario diffs
+      3. github.com PR URL -> live GitHub API
+      4. anything else -> treat input as raw diff text
     """
     if pr_url in MOCK_PRS:
         return MOCK_PRS[pr_url]
+
+    evaluation_pr = _evaluation_pr(pr_url)
+    if evaluation_pr is not None:
+        return evaluation_pr
 
     if pr_url.startswith("https://github.com/") and "/pull/" in pr_url:
         try:
@@ -134,7 +206,6 @@ def get_pr_data(pr_url: str) -> PRData:
             token = getattr(settings, "github_token", None) or None
             return get_real_pr_data(pr_url, token=token)
         except ValueError as exc:
-            # Handle rate limit errors gracefully with clear message
             error_msg = str(exc)
             log_structured(
                 "ERROR",
@@ -152,7 +223,11 @@ def get_pr_data(pr_url: str) -> PRData:
                 head_branch="feature",
                 files_changed=[],
                 language="Unknown",
-                diff=f"Error: {error_msg}\n\nPlease check your GITHUB_TOKEN environment variable.",
+                diff=(
+                    "# ERROR: GitHub fetch failed\n"
+                    f"# Reason: {error_msg}\n"
+                    "# Check GITHUB_TOKEN and repository access."
+                ),
             )
         except Exception as exc:
             log_structured(
@@ -177,13 +252,4 @@ def get_pr_data(pr_url: str) -> PRData:
                 ),
             )
 
-    return PRData(
-        url=pr_url,
-        title="Custom PR",
-        author="unknown",
-        base_branch="main",
-        head_branch="feature",
-        files_changed=["unknown.py"],
-        language="Python",
-        diff=pr_url,
-    )
+    return _raw_diff_pr(pr_url)

@@ -48,6 +48,10 @@ class CachePolicy(BaseModel):
     rag_ttl_seconds: int
 
 
+class APISettings(BaseModel):
+    cors_allowed_origins: list[str]
+
+
 class RateLimitPolicy(BaseModel):
     requests: int
     window_seconds: int
@@ -62,6 +66,7 @@ class Settings(BaseSettings):
 
     groq_api_key: str = Field(..., validation_alias="GROQ_API_KEY")
     github_token: Optional[str] = Field(default=None, validation_alias="GITHUB_TOKEN")
+    app_env: str = Field(default="development", validation_alias="APP_ENV")
 
     generation_model: str = Field(default="llama-3.1-8b-instant", validation_alias="GENERATION_MODEL")
     reasoning_model: str = Field(default="llama-3.1-8b-instant", validation_alias="REASONING_MODEL")
@@ -101,6 +106,10 @@ class Settings(BaseSettings):
 
     pr_cache_ttl_seconds: int = Field(default=120, validation_alias="PR_CACHE_TTL_SECONDS")
     rag_cache_ttl_seconds: int = Field(default=300, validation_alias="RAG_CACHE_TTL_SECONDS")
+    cors_allowed_origins_raw: str = Field(
+        default="http://127.0.0.1:5173,http://localhost:5173",
+        validation_alias="CORS_ALLOWED_ORIGINS",
+    )
 
     @cached_property
     def models(self) -> ModelProfiles:
@@ -165,6 +174,15 @@ class Settings(BaseSettings):
             requests=self.rate_limit_requests,
             window_seconds=self.rate_limit_window_seconds,
         )
+
+    @cached_property
+    def api(self) -> APISettings:
+        origins = [
+            origin.strip()
+            for origin in self.cors_allowed_origins_raw.split(",")
+            if origin.strip()
+        ]
+        return APISettings(cors_allowed_origins=origins)
 
 
 settings = Settings()

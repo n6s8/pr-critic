@@ -1,53 +1,6 @@
 import { useCallback, useRef, useState } from 'react'
 import { analyzeRP } from '../api/analyze'
-import type {
-  AnalyzeResponse,
-  LogLevel,
-  PipelineStep,
-  PipelineStepStatus,
-  ReviewState,
-} from '../types'
-
-const PIPELINE_BLUEPRINT: Array<Omit<PipelineStep, 'status'>> = [
-  {
-    id: 'fetch',
-    label: 'Fetch',
-    description: 'Retrieving pull request metadata and diff context.',
-  },
-  {
-    id: 'rag',
-    label: 'Rag',
-    description: 'Loading retrieval context and coding guidance.',
-  },
-  {
-    id: 'review',
-    label: 'Review',
-    description: 'Generating the structured reviewer narrative.',
-  },
-  {
-    id: 'critic',
-    label: 'Critic',
-    description: 'Scoring quality and finalizing the response.',
-  },
-]
-
-function createInitialPipelineSteps(): PipelineStep[] {
-  return PIPELINE_BLUEPRINT.map(step => ({ ...step, status: 'pending' }))
-}
-
-function updatePipelineStepStatus(
-  steps: PipelineStep[],
-  targetId: PipelineStep['id'],
-  status: PipelineStepStatus
-) {
-  return steps.map(step => (step.id === targetId ? { ...step, status } : step))
-}
-
-function wait(ms: number) {
-  return new Promise<void>(resolve => {
-    window.setTimeout(resolve, ms)
-  })
-}
+import type { AnalyzeResponse, ReviewState } from '../types'
 
 function getInitialExpandedAgents(data: AnalyzeResponse) {
   const agents = [...new Set((data.trace ?? []).map(entry => entry.agent))]
@@ -65,12 +18,8 @@ export function useReviewState() {
     data: null,
     loading: false,
     error: null,
-    activeStrategyId: '',
-    compareStrategyIds: [],
-    selectedPipelineAgent: null,
-    traceFilters: { INFO: true, WARN: true, ERROR: true, DEBUG: true, SUCCESS: true },
+    activeCandidateIndex: null,
     expandedAgents: {},
-    pipelineSteps: createInitialPipelineSteps(),
     activeIssueId: null,
   })
 
@@ -88,36 +37,13 @@ export function useReviewState() {
       loading: true,
       error: null,
       data: null,
-      activeStrategyId: '',
-      compareStrategyIds: [],
-      selectedPipelineAgent: null,
+      activeCandidateIndex: null,
       expandedAgents: {},
-      pipelineSteps: createInitialPipelineSteps(),
       activeIssueId: null,
     }))
 
     try {
-      const pipelinePromise = (async () => {
-        for (const step of PIPELINE_BLUEPRINT) {
-          if (requestIdRef.current !== requestId) return
-
-          setState(current => ({
-            ...current,
-            pipelineSteps: updatePipelineStepStatus(current.pipelineSteps, step.id, 'loading'),
-          }))
-
-          await wait(300 + Math.floor(Math.random() * 501))
-
-          if (requestIdRef.current !== requestId) return
-
-          setState(current => ({
-            ...current,
-            pipelineSteps: updatePipelineStepStatus(current.pipelineSteps, step.id, 'success'),
-          }))
-        }
-      })()
-
-      const [data] = await Promise.all([analyzeRP(url), pipelinePromise])
+      const data = await analyzeRP(url)
 
       if (requestIdRef.current !== requestId) return
 
@@ -125,15 +51,8 @@ export function useReviewState() {
         ...current,
         data,
         loading: false,
-        activeStrategyId:
-          data.selected_strategy ||
-          data.strategies[0]?.id ||
-          '',
+        activeCandidateIndex: data.selected_index,
         expandedAgents: getInitialExpandedAgents(data),
-        pipelineSteps:
-          current.pipelineSteps.every(step => step.status === 'success')
-            ? current.pipelineSteps
-            : createInitialPipelineSteps().map(step => ({ ...step, status: 'success' })),
       }))
     } catch (error) {
       if (requestIdRef.current !== requestId) return
@@ -147,55 +66,8 @@ export function useReviewState() {
     }
   }, [])
 
-  const setActiveStrategy = useCallback((id: string) => {
-    setState(current => ({ ...current, activeStrategyId: id }))
-  }, [])
-
-  const toggleCompare = useCallback((id: string) => {
-    setState(current => {
-      const previous = current.compareStrategyIds
-
-      if (previous.includes(id)) {
-        return {
-          ...current,
-          compareStrategyIds: previous.filter(value => value !== id),
-        }
-      }
-
-      if (previous.length >= 2) {
-        return {
-          ...current,
-          compareStrategyIds: [previous[1], id],
-        }
-      }
-
-      return {
-        ...current,
-        compareStrategyIds: [...previous, id],
-      }
-    })
-  }, [])
-
-  const clearCompare = useCallback(() => {
-    setState(current => ({ ...current, compareStrategyIds: [] }))
-  }, [])
-
-  const selectPipelineAgent = useCallback((agent: string) => {
-    setState(current => ({
-      ...current,
-      selectedPipelineAgent:
-        current.selectedPipelineAgent === agent ? null : agent,
-    }))
-  }, [])
-
-  const toggleTraceFilter = useCallback((level: LogLevel) => {
-    setState(current => ({
-      ...current,
-      traceFilters: {
-        ...current.traceFilters,
-        [level]: !current.traceFilters[level],
-      },
-    }))
+  const setActiveCandidate = useCallback((index: number) => {
+    setState(current => ({ ...current, activeCandidateIndex: index }))
   }, [])
 
   const toggleAgent = useCallback((agent: string) => {
@@ -213,7 +85,6 @@ export function useReviewState() {
       if (!current.data) return current
 
       const agents = [...new Set(current.data.trace.map(entry => entry.agent))]
-
       return {
         ...current,
         expandedAgents: Object.fromEntries(agents.map(agent => [agent, true])),
@@ -226,7 +97,6 @@ export function useReviewState() {
       if (!current.data) return current
 
       const agents = [...new Set(current.data.trace.map(entry => entry.agent))]
-
       return {
         ...current,
         expandedAgents: Object.fromEntries(agents.map(agent => [agent, false])),
@@ -242,12 +112,8 @@ export function useReviewState() {
     ...state,
     setPrUrl,
     analyze,
-    setActiveStrategy,
+    setActiveCandidate,
     setActiveIssue,
-    toggleCompare,
-    clearCompare,
-    selectPipelineAgent,
-    toggleTraceFilter,
     toggleAgent,
     expandAll,
     collapseAll,

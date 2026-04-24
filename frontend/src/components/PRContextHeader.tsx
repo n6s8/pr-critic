@@ -1,10 +1,10 @@
 import { memo, useMemo } from 'react'
-import type { TraceEntry } from '../types'
+import type { PRMetadata } from '../types'
 import { derivePrContext, formatDiffSize } from '../lib/utils'
 
 interface Props {
-  prUrl: string
-  trace: TraceEntry[]
+  prMetadata: PRMetadata
+  diffSize: number
 }
 
 function StatPill({
@@ -24,8 +24,11 @@ function StatPill({
   )
 }
 
-function PRContextHeaderComponent({ prUrl, trace }: Props) {
-  const context = useMemo(() => derivePrContext(prUrl, trace), [prUrl, trace])
+function PRContextHeaderComponent({ prMetadata, diffSize }: Props) {
+  const context = useMemo(
+    () => derivePrContext(prMetadata, diffSize),
+    [diffSize, prMetadata]
+  )
 
   return (
     <div className="border-b border-white/10 px-6 py-6">
@@ -34,22 +37,15 @@ function PRContextHeaderComponent({ prUrl, trace }: Props) {
           <p className="section-label">Pull Request</p>
           <h2 className="mt-2 text-3xl font-semibold text-white">{context.title}</h2>
           <p className="mt-2 text-sm text-slate-400">
-            {context.repoLabel} - imported diff analysis
+            {context.repoLabel} - {context.source.toLowerCase()}
           </p>
         </div>
 
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <StatPill label="Language" value={context.language} />
-          <StatPill
-            label="Files Changed"
-            value={
-              context.filesChanged === null
-                ? 'n/a'
-                : String(context.filesChanged)
-            }
-          />
+          <StatPill label="Files Changed" value={String(context.filesChanged)} />
           <StatPill label="Diff Size" value={formatDiffSize(context.diffSize)} />
-          <StatPill label="Source" value="Backend trace" />
+          <StatPill label="Source" value={context.source} />
         </div>
       </div>
     </div>

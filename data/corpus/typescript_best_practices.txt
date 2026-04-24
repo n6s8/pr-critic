@@ -1,0 +1,48 @@
+TypeScript and React Review Guidance
+Source: Internal review checklist derived from common TypeScript and React best practices
+Category: style
+
+---
+SECTION: Type Safety
+Prefer explicit domain types over `any`.
+BAD: function loadUser(id: any): any
+GOOD: function loadUser(id: string): Promise<User>
+Use discriminated unions for variant state instead of boolean flags.
+Prefer readonly fields for immutable value objects.
+
+---
+SECTION: Null and Undefined Handling
+Avoid non-null assertions unless a previous guard proves safety.
+BAD: user!.profile!.name
+GOOD: if (!user?.profile) return null
+Use optional chaining and narrow values before access.
+Model nullable values explicitly in the type system.
+
+---
+SECTION: React Hooks
+Effects should synchronize with external systems, not replace derived state.
+Include every value used inside an effect in its dependency list unless it is stable by construction.
+BAD: useEffect(() => { fetchUser(userId) }, [])
+GOOD: useEffect(() => { fetchUser(userId) }, [userId])
+Avoid stale closures by reading the latest reactive values correctly.
+
+---
+SECTION: Async Patterns
+Always handle rejected promises in user-facing flows.
+Prefer `await` with try/catch for sequential async work.
+Cancel or ignore stale requests in components to avoid race conditions.
+Return typed results from async functions instead of loose objects.
+
+---
+SECTION: Rendering and Security
+Do not render unsanitized HTML.
+BAD: <div dangerouslySetInnerHTML={{ __html: user.bio }} />
+GOOD: sanitize the HTML or render structured content instead.
+Do not trust data coming from query params, local storage, or backend strings.
+
+---
+SECTION: State Management
+Keep a single source of truth.
+Do not duplicate server data into multiple unsynchronized local states.
+Use reducer-style transitions when state has multiple linked branches.
+Prefer derived values over extra useState fields when the value can be computed.

@@ -1,0 +1,34 @@
+React Frontend Security Checklist
+Source: Internal guidance based on common web application security review rules
+Category: security
+
+---
+SECTION: XSS
+Treat all user-provided strings as untrusted.
+Avoid `dangerouslySetInnerHTML` unless the HTML is sanitized first.
+Do not build DOM snippets by concatenating user input into HTML strings.
+Escape or encode content when rendering dynamic values in unusual contexts.
+
+---
+SECTION: Authentication and Tokens
+Do not hardcode API keys, JWT secrets, or bearer tokens in frontend code.
+Do not store long-lived secrets in local storage if the same effect can be achieved server-side.
+Prefer HttpOnly cookies for session tokens when architecture allows.
+Never log tokens or sensitive identity claims to the browser console.
+
+---
+SECTION: Data Fetching
+Validate route params and query params before using them in privileged requests.
+Handle stale requests so an older response cannot overwrite newer state.
+Guard administrative actions in the backend even if the UI hides the controls.
+
+---
+SECTION: Dependency and Event Safety
+Keep effect dependencies accurate so auth and permission checks rerun when identity changes.
+Do not trust disabled buttons as an authorization mechanism.
+Validate file uploads, URL redirects, and navigation targets before acting on them.
+
+---
+SECTION: Error Handling
+Do not expose internal stack traces or raw backend error payloads to end users.
+Show safe fallback messages in the UI and log detailed errors only to controlled telemetry.

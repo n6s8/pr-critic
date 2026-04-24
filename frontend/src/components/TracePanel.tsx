@@ -11,24 +11,19 @@ import {
   formatAgentName,
   formatDuration,
   formatRelativeTime,
+  formatTraceSummary,
   formatTraceTimestamp,
   getAgentDurationMs,
   getAgentStatus,
   groupTraceByAgent,
 } from '../lib/utils'
 
-const LEVEL_STYLES = {
-  INFO: 'border-sky-400/20 bg-sky-400/10 text-sky-300',
-  WARN: 'border-orange-400/20 bg-orange-400/10 text-orange-300',
-  ERROR: 'border-red-400/20 bg-red-400/10 text-red-300',
-  DEBUG: 'border-slate-400/20 bg-slate-400/10 text-slate-300',
-  SUCCESS: 'border-emerald-400/20 bg-emerald-400/10 text-emerald-300',
-} as const
-
 const STATUS_STYLES = {
-  success: 'border-emerald-400/20 bg-emerald-500/10 text-emerald-300',
+  completed: 'border-emerald-400/20 bg-emerald-500/10 text-emerald-300',
+  warning: 'border-orange-400/20 bg-orange-500/10 text-orange-300',
   error: 'border-red-400/20 bg-red-500/10 text-red-300',
-  running: 'border-sky-400/20 bg-sky-500/10 text-sky-300',
+  started: 'border-slate-400/20 bg-slate-500/10 text-slate-300',
+  routing: 'border-sky-400/20 bg-sky-500/10 text-sky-300',
 } as const
 
 function Chevron({ expanded }: { expanded: boolean }) {
@@ -112,7 +107,7 @@ function TracePanelComponent({
           <p className="section-label">Trace</p>
           <h2 className="mt-2 text-2xl font-semibold text-white">Execution Timeline</h2>
           <p className="mt-2 text-sm text-slate-400">
-            Multi-agent execution rendered as an interactive, auto-tracking timeline.
+            Structured backend trace events grouped by agent.
           </p>
         </div>
 
@@ -176,12 +171,12 @@ function TracePanelComponent({
                     </p>
                     {isLatest && (
                       <span className="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-emerald-200">
-                        Active
+                        Latest
                       </span>
                     )}
                   </div>
                   <p className="mt-1 truncate text-xs text-slate-500">
-                    {entries[entries.length - 1]?.message ?? 'No log entries'}
+                    {formatTraceSummary(entries[entries.length - 1])}
                   </p>
                 </div>
 
@@ -236,8 +231,8 @@ function TracePanelComponent({
                                   <span className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[11px] font-medium text-slate-200">
                                     [{formatAgentName(entry.agent)}]
                                   </span>
-                                  <span className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold ${LEVEL_STYLES[entry.level]}`}>
-                                    [{entry.level}]
+                                  <span className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold ${STATUS_STYLES[entry.status]}`}>
+                                    [{entry.status}]
                                   </span>
                                   <span
                                     className="text-xs text-slate-500"
@@ -253,7 +248,7 @@ function TracePanelComponent({
                               </div>
 
                               <p className="mt-3 text-sm leading-7 text-slate-200">
-                                {entry.message}
+                                {formatTraceSummary(entry)}
                               </p>
                             </button>
 
@@ -264,7 +259,15 @@ function TracePanelComponent({
                               )}
                             >
                               <div className="overflow-hidden px-4 py-4">
-                                <div className="grid gap-4 md:grid-cols-2">
+                                <div className="grid gap-4 md:grid-cols-3">
+                                  <div>
+                                    <p className="text-[11px] uppercase tracking-[0.12em] text-slate-500">
+                                      Event
+                                    </p>
+                                    <p className="mt-2 text-sm text-slate-200">
+                                      {entry.event}
+                                    </p>
+                                  </div>
                                   <div>
                                     <p className="text-[11px] uppercase tracking-[0.12em] text-slate-500">
                                       Timestamp
@@ -275,13 +278,21 @@ function TracePanelComponent({
                                   </div>
                                   <div>
                                     <p className="text-[11px] uppercase tracking-[0.12em] text-slate-500">
-                                      Relative
+                                      Duration
                                     </p>
                                     <p className="mt-2 text-sm text-slate-200">
-                                      {formatRelativeTime(entry.timestamp) || 'n/a'}
+                                      {formatDuration(entry.duration_ms)}
                                     </p>
                                   </div>
                                 </div>
+
+                                {Object.keys(entry.data).length > 0 && (
+                                  <div className="mt-4 rounded-2xl border border-white/10 bg-slate-950/60 p-4">
+                                    <pre className="overflow-x-auto whitespace-pre-wrap break-words text-xs leading-6 text-slate-300">
+                                      {JSON.stringify(entry.data, null, 2)}
+                                    </pre>
+                                  </div>
+                                )}
                               </div>
                             </div>
                           </div>

@@ -18,8 +18,8 @@ from backend.observability.logger import log_start, log_end, log_error
 def fetch_agent(state: FetchAgentInput) -> FetchAgentOutput:
     t0 = time.perf_counter()
     pr_url = state["pr_url"]
-    log_start("fetch_agent", {"pr_url": pr_url})
     trace = list(state.get("trace", []))
+    start_event = log_start("fetch_agent", {"pr_url": pr_url})
 
     try:
         pr = get_pr_data(pr_url)
@@ -50,13 +50,13 @@ def fetch_agent(state: FetchAgentInput) -> FetchAgentOutput:
             "files_changed": pr.files_changed,
             "language": language,
             "diff_length": len(pr.diff),
-            "source": "github" if "github.com" in pr_url else "mock",
+            "source": "github" if "github.com" in pr_url else ("evaluation" if pr_url.startswith("eval://") else "mock"),
         }, (time.perf_counter() - t0) * 1000)
 
         return {
             "pr_diff": pr.diff,
             "pr_metadata": metadata,
-            "trace": trace + [ev],
+            "trace": trace + [start_event, ev],
         }
 
     except Exception as exc:
@@ -64,5 +64,5 @@ def fetch_agent(state: FetchAgentInput) -> FetchAgentOutput:
         return {
             "pr_diff": "",
             "pr_metadata": {"language": "Unknown", "title": "Fetch failed", "error": str(exc)},
-            "trace": trace + [ev],
+            "trace": trace + [start_event, ev],
         }

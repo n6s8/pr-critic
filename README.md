@@ -1,46 +1,81 @@
 # PR Critic
 
-PR Critic is a multi-agent pull request review system. It fetches a PR diff, enriches it with retrieval context, generates review candidates, scores them, and returns a structured response for a React dashboard.
-
-The repository contains:
-
-- A FastAPI backend that runs the review pipeline
-- A React + TypeScript frontend for inspection and triage
-- Evaluation scripts and scenarios for repeatable testing
+PR Critic is a pull request review system with a FastAPI backend, a LangGraph workflow, a local retrieval layer, and a React dashboard. It analyzes a diff, produces one or more grounded review candidates, scores them independently, and returns the selected review together with the evidence used to make that decision.
 
 ## What The System Does
 
-Given a pull request diff URL, the backend executes a review workflow:
+For each review request, the backend:
 
-1. Fetch the diff and PR metadata
-2. Retrieve supporting context from the local corpus
-3. Generate a code review
-4. Critique the review and score it
-5. Branch into alternative strategies when needed
-6. Select the best final review
+1. Fetches the raw diff and PR metadata
+2. Retrieves language-relevant guidance from the local corpus
+3. Generates an initial review candidate
+4. Scores each candidate independently
+5. Branches into alternate strategies only when the initial candidate underperforms
+6. Selects the best candidate and returns the full result contract
 
-The frontend renders the result as a review dashboard with score, strategies, issues, and execution trace.
+The frontend renders only backend-owned data: PR metadata, real diff content, retrieval snippets, review candidates, the selected review, extracted issues, and a structured execution trace.
+
+## What Makes This System Different
+
+- Real evaluation: scenario runs are measured against `expected_issues` with precision, recall, F1, and false positives instead of synthetic score buckets.
+- Multi-agent selection: the system keeps explicit candidate state, scores each candidate independently, and records `selector_reason` for the final decision.
+- Explainable RAG: retrieval is visible as `{ source, snippet }` evidence instead of hidden prompt context.
 
 ## Backend Response Contract
 
-The backend response shape is the source of truth for the frontend:
+The backend response is the source of truth for the frontend.
 
 ```json
 {
-  "score": 8.5,
-  "strategies": [
+  "language": "TypeScript",
+  "files_changed": ["src/components/ChatWindow.tsx"],
+  "diff_size": 3268,
+  "pr_metadata": {
+    "title": "Sanitize profile rendering",
+    "author": "octocat",
+    "base_branch": "main",
+    "head_branch": "fix/profile-xss",
+    "language": "TypeScript",
+    "files_changed": ["src/components/ChatWindow.tsx"],
+    "pr_url": "https://github.com/org/repo/pull/123"
+  },
+  "diff": "diff --git a/src/components/ChatWindow.tsx ...",
+  "retrieval": [
     {
-      "id": "initial",
-      "name": "Balanced Review",
-      "score": 8.5,
-      "description": "Balanced review covering correctness, security, style, and maintainability."
+      "source": "react_security",
+      "section": "XSS",
+      "snippet": "Avoid dangerouslySetInnerHTML unless the HTML is sanitized first.",
+      "relevance": 0.92
     }
   ],
-  "selected_strategy": "initial",
-  "review": "## Summary\n...",
+  "candidates": [
+    {
+      "index": 0,
+      "id": "initial-0",
+      "strategy": "initial",
+      "review": "## Summary\n...",
+      "score": 8.5,
+      "score_rationale": "Strong coverage of the visible risk.",
+      "critic_issues": ["xss", "sanitization"]
+    }
+  ],
+  "selected_index": 0,
+  "selected_review": {
+    "index": 0,
+    "id": "initial-0",
+    "strategy": "initial",
+    "review": "## Summary\n...",
+    "score": 8.5,
+    "score_rationale": "Strong coverage of the visible risk.",
+    "critic_issues": ["xss", "sanitization"]
+  },
+  "score": 8.5,
+  "selector_reason": "Selected the only candidate returned by the pipeline.",
+  "branch_taken": false,
+  "branch_improvement": null,
   "issues": [
     {
-      "severity": "info",
+      "severity": "warning",
       "file": "src/components/ChatWindow.tsx",
       "line": 81,
       "message": "Example issue message."
@@ -49,9 +84,14 @@ The backend response shape is the source of truth for the frontend:
   "trace": [
     {
       "agent": "fetch_agent",
-      "level": "INFO",
-      "message": "fetch_agent completed: language=TypeScript, diff_length=3268, in 2239ms",
-      "timestamp": "2026-04-13T15:54:06.892849+00:00"
+      "event": "end",
+      "status": "completed",
+      "timestamp": "2026-04-13T15:54:06.892849+00:00",
+      "duration_ms": 23.4,
+      "data": {
+        "language": "TypeScript",
+        "diff_length": 3268
+      }
     }
   ]
 }
@@ -61,40 +101,40 @@ The backend response shape is the source of truth for the frontend:
 
 ### Review Pipeline
 
-- `fetch_agent`: loads PR diff and metadata
-- `rag_agent`: retrieves relevant guidance from local reference data
-- `review_agent`: produces the initial review text
-- `critic_agent`: scores the review and decides whether branching is needed
-- `branch_agent`: generates alternate review strategies when the score is below threshold
-- `selector_agent`: picks the final review to return
+- `fetch_agent`: loads the diff and metadata
+- `rag_agent`: retrieves language-aware guidance from the local corpus
+- `review_agent`: generates the initial review candidate
+- `critic_agent`: scores each unscored candidate independently and decides whether branching is needed
+- `branch_agent`: creates real alternative candidates with different review strategies
+- `selector_agent`: chooses the best candidate and records `selector_reason`
 
 ### Backend
 
 - Framework: FastAPI
 - Orchestration: LangGraph
-- Models: LangChain integrations
-- Observability: trace events emitted through the workflow
+- Retrieval: local TF-IDF corpus
+- Observability: structured trace events returned to the client
 
 ### Frontend
 
 - Framework: React 18
 - Build tool: Vite
 - Language: TypeScript
-- Styling: Tailwind CSS and component-level utility classes
+- Contract rule: no parsing from logs and no synthetic diff or pipeline states
 
 ## Repository Layout
 
 ```text
 backend/
-  agents/           Individual review pipeline agents
+  agents/           Review pipeline agents
   api/              FastAPI app and API helpers
-  graph/            Workflow state and LangGraph assembly
+  graph/            Workflow state and graph assembly
   mcp/              GitHub access and mock implementations
-  observability/    Logging helpers
+  observability/    Logging and trace helpers
   rag/              Retrieval components
 
 data/               Retrieval corpus and local reference material
-evaluation/         Evaluation scenarios, metrics, and result outputs
+evaluation/         Scenarios and evaluation metrics
 frontend/           React dashboard
 scripts/            Developer utilities, including evaluation runner
 tests/              Automated tests
@@ -105,21 +145,17 @@ tests/              Automated tests
 - Python 3.11 or later
 - Node.js 18 or later
 - npm
-- `GROQ_API_KEY` for live LLM execution
+- `GROQ_API_KEY` for live model execution
 
 ## Setup
 
 ### 1. Install backend dependencies
-
-From the repository root:
 
 ```bash
 pip install -e ".[dev]"
 ```
 
 ### 2. Configure environment
-
-Create a `.env` file in the repository root:
 
 ```env
 GROQ_API_KEY=your_api_key
@@ -136,68 +172,32 @@ npm install
 
 ### Start the backend
 
-From the repository root:
-
 ```bash
 uvicorn backend.api.main:app --reload --port 8000
 ```
 
-Default local address:
-
-```text
-http://127.0.0.1:8000
-```
-
 ### Start the frontend
-
-In a separate terminal:
 
 ```bash
 cd frontend
 npm run dev
 ```
 
-Default local address:
-
-```text
-http://127.0.0.1:5173
-```
-
 ## API Endpoints
 
-### `POST /review`
-
-Runs the full review pipeline for a pull request diff URL.
-
-Request body:
-
-```json
-{
-  "pr_url": "https://github.com/org/repo/pull/123.diff"
-}
-```
-
-### `GET /review/mock-prs`
-
-Returns the list of built-in mock PRs available for local testing.
-
-### `GET /health`
-
-Returns service health and basic runtime metadata.
+- `POST /review`: runs the full review pipeline for a diff source
+- `GET /review/mock-prs`: lists built-in mock PRs for local testing
+- `GET /health`: returns service health and runtime metadata
 
 ## Local Development Workflow
 
 ### Run tests
-
-From the repository root:
 
 ```bash
 pytest -v
 ```
 
 ### Run evaluation in mock mode
-
-Mock mode does not require live model calls.
 
 ```bash
 python scripts/run_evaluation.py --mock
@@ -209,75 +209,19 @@ python scripts/run_evaluation.py --mock
 python scripts/run_evaluation.py --delay 1.0
 ```
 
-### Run a specific scenario
+## Limitations
 
-```bash
-python scripts/run_evaluation.py --scenario sec/sql-injection
-```
+- The retrieval corpus is still small and local.
+- GitHub webhook and GitHub App automation are not implemented.
+- Very large PRs are chunked conservatively, not deeply optimized.
 
-### Run selected categories
+## Trade-offs
 
-```bash
-python scripts/run_evaluation.py --categories security,style
-```
-
-Evaluation results are written to:
-
-```text
-evaluation/results.json
-```
-
-## Configuration
-
-Runtime settings are defined in `backend/config.py`.
-
-Key settings include:
-
-- Branch score threshold
-- Maximum number of branch alternatives
-- Generation and reasoning model selection
-- GitHub integration behavior
+- The project uses simple local TF-IDF retrieval instead of a vector database to keep the system deterministic and low-overhead for a small corpus.
+- Evaluation is local and scenario-based rather than human-labeled at scale, which keeps it repeatable but narrower than a full production benchmark.
 
 ## Notes
 
-- The backend is the owner of the response contract consumed by the frontend.
-- The frontend should use only the documented fields in the response payload.
-- Mock mode is intended for deterministic local testing and evaluation.
-- Live mode depends on valid external model credentials.
-
-## Troubleshooting
-
-### Backend starts but `/review` fails
-
-Check:
-
-- `.env` exists in the repository root
-- `GROQ_API_KEY` is set for live mode
-- The PR diff URL is reachable and valid
-
-### Frontend loads but shows no data
-
-Check:
-
-- Backend is running on port `8000`
-- Frontend dev server is running on port `5173`
-- Browser network requests to `/review` are succeeding
-
-### Evaluation run fails
-
-Check:
-
-- Python environment is active
-- Project dependencies are installed
-- Use `--mock` first to validate the pipeline locally
-
-## Current Scope
-
-This repository is structured for iterative work on:
-
-- Backend review quality
-- Branching and strategy selection
-- Frontend review UX
-- Evaluation coverage and repeatability
-
-The intended outcome is a production-oriented developer tool, not a demo-only prototype.
+- The backend owns the response contract consumed by the frontend.
+- Mock mode replaces model calls only; the evaluation metrics remain real.
+- If retrieval is unavailable, the system returns an empty retrieval section instead of fabricated guidance.

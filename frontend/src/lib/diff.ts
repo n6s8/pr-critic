@@ -1,9 +1,7 @@
-import type { DiffFile, DiffHunk, DiffLine, DiffFileStatus, Issue, TraceEntry } from '../types'
+import type { DiffFile, DiffHunk, DiffLine, DiffFileStatus, Issue } from '../types'
 
-const DIFF_FENCE_RE = /```diff\s*([\s\S]*?)```/gi
 const DIFF_START_RE = /^diff --git\s+a\/(.+?)\s+b\/(.+)$/i
 const HUNK_HEADER_RE = /^@@\s*-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?\s*@@(.*)$/
-const FILES_CHANGED_RE = /files_changed=\[(.*?)\]/i
 
 function normalizePath(value: string | null | undefined) {
   return String(value ?? '')
@@ -54,175 +52,13 @@ function createLine(
   }
 }
 
-function extractDiffFromReview(review: string) {
-  if (!review.trim()) return ''
-
-  const fencedBlocks = [...review.matchAll(DIFF_FENCE_RE)]
-    .map(match => match[1].trim())
-    .filter(Boolean)
-
-  if (fencedBlocks.length > 0) {
-    return fencedBlocks.join('\n')
-  }
-
-  if (review.includes('diff --git') && review.includes('@@')) {
-    const start = review.indexOf('diff --git')
-    return review.slice(start).trim()
-  }
-
-  return ''
-}
-
-function getCommentPrefix(filePath: string) {
-  const extension = filePath.split('.').pop()?.toLowerCase()
-
-  if (extension === 'py' || extension === 'rb' || extension === 'sh') {
-    return '#'
-  }
-
-  if (extension === 'html' || extension === 'xml') {
-    return '<!--'
-  }
-
-  return '//'
-}
-
-function createSyntheticFiles(
-  issues: Issue[],
-  filesFromTrace: string[]
-): DiffFile[] {
-  const groupedIssues = new Map<string, Issue[]>()
-
-  for (const issue of issues) {
-    const filePath = normalizePath(issue.file) || 'unknown'
-    const existing = groupedIssues.get(filePath) ?? []
-    existing.push(issue)
-    groupedIssues.set(filePath, existing)
-  }
-
-  for (const traceFile of filesFromTrace) {
-    const normalized = normalizePath(traceFile)
-    if (!normalized || groupedIssues.has(normalized)) continue
-    groupedIssues.set(normalized, [])
-  }
-
-  return [...groupedIssues.entries()].map(([filePath, fileIssues], fileIndex) => {
-    const sortedIssues = [...fileIssues].sort((left, right) => left.line - right.line)
-    const commentPrefix = getCommentPrefix(filePath)
-    const hunks: DiffHunk[] =
-      sortedIssues.length > 0
-        ? sortedIssues.map((issue, issueIndex) => {
-            const anchor = Math.max(1, issue.line || issueIndex + 1)
-
-            return {
-              id: `${filePath}:generated:${issueIndex}`,
-              header: `@@ -${anchor},1 +${anchor},2 @@`,
-              lines: [
-                {
-                  id: `${filePath}:generated:${issueIndex}:context`,
-                  type: 'context',
-                  oldNumber: Math.max(1, anchor - 1),
-                  newNumber: Math.max(1, anchor - 1),
-                  content: `${commentPrefix} Diff context unavailable in backend payload`,
-                  issueIds: [],
-                },
-                {
-                  id: `${filePath}:generated:${issueIndex}:removed`,
-                  type: 'removed',
-                  oldNumber: anchor,
-                  newNumber: null,
-                  content: `${commentPrefix} Original changed line not returned by API`,
-                  issueIds: [getIssueId(issue)],
-                },
-                {
-                  id: `${filePath}:generated:${issueIndex}:added`,
-                  type: 'added',
-                  oldNumber: null,
-                  newNumber: anchor,
-                  content:
-                    commentPrefix === '<!--'
-                      ? `<!-- Finding: ${issue.message} -->`
-                      : `${commentPrefix} Finding: ${issue.message}`,
-                  issueIds: [getIssueId(issue)],
-                },
-              ],
-            }
-          })
-        : [
-            {
-              id: `${filePath}:generated:empty`,
-              header: '@@ -1,1 +1,2 @@',
-              lines: [
-                {
-                  id: `${filePath}:generated:empty:removed`,
-                  type: 'removed',
-                  oldNumber: 1,
-                  newNumber: null,
-                  content: `${commentPrefix} Exact diff lines unavailable`,
-                  issueIds: [],
-                },
-                {
-                  id: `${filePath}:generated:empty:added`,
-                  type: 'added',
-                  oldNumber: null,
-                  newNumber: 1,
-                  content:
-                    commentPrefix === '<!--'
-                      ? '<!-- File listed in execution trace -->'
-                      : `${commentPrefix} File listed in execution trace`,
-                  issueIds: [],
-                },
-              ],
-            },
-          ]
-
-    return {
-      id: `${filePath}:${fileIndex}`,
-      path: filePath,
-      oldPath: filePath,
-      newPath: filePath,
-      status: 'generated',
-      source: 'generated',
-      additions: hunks.reduce(
-        (total, hunk) => total + hunk.lines.filter(line => line.type === 'added').length,
-        0
-      ),
-      deletions: hunks.reduce(
-        (total, hunk) => total + hunk.lines.filter(line => line.type === 'removed').length,
-        0
-      ),
-      hunks,
-      issues: sortedIssues,
-    }
-  })
-}
-
-function parseFilesChangedFromTrace(trace: TraceEntry[]) {
-  const collected = new Set<string>()
-
-  for (const entry of trace) {
-    const match = entry.message.match(FILES_CHANGED_RE)
-    if (!match?.[1]) continue
-
-    for (const file of match[1].match(/'([^']+)'|"([^"]+)"/g) ?? []) {
-      const normalized = normalizePath(file)
-      if (normalized) collected.add(normalized)
-    }
-  }
-
-  return [...collected]
-}
-
 export function getIssueId(issue: Pick<Issue, 'file' | 'line' | 'message'>) {
   return `${normalizePath(issue.file)}:${issue.line}:${issue.message}`
 }
 
-export function parseDiffFiles(review: string, issues: Issue[], trace: TraceEntry[]) {
-  const diffSource = extractDiffFromReview(review)
-  const filesFromTrace = parseFilesChangedFromTrace(trace)
-
-  if (!diffSource) {
-    return createSyntheticFiles(issues, filesFromTrace)
+export function parseDiffFiles(diff: string, issues: Issue[]) {
+  if (!diff.trim()) {
+    return [] as DiffFile[]
   }
 
   const files: DiffFile[] = []
@@ -260,7 +96,6 @@ export function parseDiffFiles(review: string, issues: Issue[], trace: TraceEntr
       oldPath: fallbackPath,
       newPath: fallbackPath,
       status: 'modified',
-      source: 'review',
       additions: 0,
       deletions: 0,
       hunks: [],
@@ -270,7 +105,7 @@ export function parseDiffFiles(review: string, issues: Issue[], trace: TraceEntr
     return currentFile
   }
 
-  for (const rawLine of diffSource.replace(/\r\n/g, '\n').split('\n')) {
+  for (const rawLine of diff.replace(/\r\n/g, '\n').split('\n')) {
     const diffStartMatch = rawLine.match(DIFF_START_RE)
 
     if (diffStartMatch) {
@@ -284,7 +119,6 @@ export function parseDiffFiles(review: string, issues: Issue[], trace: TraceEntr
         oldPath: oldPath || null,
         newPath: newPath || null,
         status: 'modified',
-        source: 'review',
         additions: 0,
         deletions: 0,
         hunks: [],
@@ -343,7 +177,7 @@ export function parseDiffFiles(review: string, issues: Issue[], trace: TraceEntr
 
     const hunkMatch = rawLine.match(HUNK_HEADER_RE)
     if (hunkMatch) {
-      const file = ensureFile(filesFromTrace[files.length] ?? issues[0]?.file ?? 'unknown')
+      const file = ensureFile(issues[0]?.file ?? 'unknown')
       const issueIdsByLine = new Map<number, string[]>()
 
       for (const issue of issues.filter(item => isFileMatch(file.path, item.file))) {
@@ -414,6 +248,5 @@ export function parseDiffFiles(review: string, issues: Issue[], trace: TraceEntr
   }
 
   pushFile()
-
-  return files.length > 0 ? files : createSyntheticFiles(issues, filesFromTrace)
+  return files
 }

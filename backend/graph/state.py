@@ -8,6 +8,7 @@ existing graph state keys.
 from backend.graph.contracts import (
     BranchAgentInput,
     BranchAgentOutput,
+    CandidateScore,
     CriticAgentInput,
     CriticAgentOutput,
     FetchAgentInput,
@@ -16,6 +17,7 @@ from backend.graph.contracts import (
     PRMetadata,
     RagAgentInput,
     RagAgentOutput,
+    RetrievalHit,
     RequestContext,
     ReviewAgentInput,
     ReviewAgentOutput,
@@ -30,6 +32,7 @@ from backend.graph.contracts import (
 __all__ = [
     "BranchAgentInput",
     "BranchAgentOutput",
+    "CandidateScore",
     "CriticAgentInput",
     "CriticAgentOutput",
     "FetchAgentInput",
@@ -38,6 +41,7 @@ __all__ = [
     "PRMetadata",
     "RagAgentInput",
     "RagAgentOutput",
+    "RetrievalHit",
     "RequestContext",
     "ReviewAgentInput",
     "ReviewAgentOutput",

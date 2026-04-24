@@ -1,26 +1,25 @@
 """
-agents/branch_agent.py — Language-aware Branch Agent.
-
-Selects review strategies based on the detected language.
-All prompts include anti-hallucination instructions.
+Branch agent responsible for creating genuine alternative review candidates
+when the initial review underperforms the branch threshold.
 """
+from __future__ import annotations
+
 import time
 
+from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_groq import ChatGroq
-from langchain_core.messages import SystemMessage, HumanMessage
 
 from backend.config import settings
-from backend.graph.state import BranchAgentInput, BranchAgentOutput, ReviewCandidate
-from backend.observability.logger import log_start, log_end, log_error
+from backend.graph.state import BranchAgentInput, BranchAgentOutput, CandidateScore, ReviewCandidate
+from backend.observability.logger import log_end, log_error, log_start
+from backend.utils.diff import prepare_diff_for_prompt
 from backend.utils.resilience import invoke_llm
 
 _llm = ChatGroq(**settings.models.branch.groq_kwargs(api_key=settings.groq_api_key))
 
-# Base rules prepended to every strategy prompt
-_BASE_RULES = """CRITICAL: Analyze ONLY the code in the provided diff.
-Do NOT invent or assume code that is not shown.
-Do NOT comment on files not in the diff.
-Use the programming language specified — do not default to Python."""
+_BASE_RULES = """Analyze only the code in the provided diff.
+Do not invent missing code or comment on files outside the diff.
+Use the supplied programming language and keep the review grounded in the change itself."""
 
 _ALL_STRATEGIES = [
     {
@@ -29,16 +28,15 @@ _ALL_STRATEGIES = [
         "prompt": f"""{_BASE_RULES}
 
 You are a security-focused code reviewer.
-Focus EXCLUSIVELY on security issues visible in the diff:
-authentication flaws, injection vulnerabilities, cryptographic weaknesses,
-hardcoded secrets, insecure deserialization, XSS, CSRF, privilege escalation.
-Reference OWASP guidelines. Do not comment on style or architecture.
+Focus on vulnerabilities visible in the diff: access control, injection,
+hardcoded secrets, insecure deserialization, weak crypto, XSS, CSRF,
+privilege escalation, and unsafe shell execution.
 
-Structure:
-1) Security Summary (what security-relevant changes are in this diff)
-2) Vulnerabilities Found (CRITICAL/HIGH/MEDIUM/LOW, with line references)
-3) Recommended Fixes (concrete code or configuration changes)
-4) Verdict: APPROVE / REQUEST_CHANGES""",
+Use this structure:
+## Summary
+## Issues Found
+## Suggestions
+## Verdict""",
     },
     {
         "name": "correctness_focus",
@@ -46,146 +44,153 @@ Structure:
         "prompt": f"""{_BASE_RULES}
 
 You are a correctness-focused code reviewer.
-Focus on: logic errors, edge cases, null/undefined handling, error handling,
-off-by-one errors, race conditions, and incorrect assumptions visible in the diff.
-Do not comment on style or formatting.
+Focus on logic errors, edge cases, null handling, incorrect assumptions,
+error handling, and behavior regressions visible in the diff.
 
-Structure:
-1) What the diff changes (brief, factual)
-2) Correctness Issues (must-fix bugs and logic errors with line references)
-3) Edge Cases Not Handled (visible from the diff only)
-4) Verdict: APPROVE / REQUEST_CHANGES""",
+Use this structure:
+## Summary
+## Issues Found
+## Suggestions
+## Verdict""",
     },
     {
         "name": "typescript_idioms",
         "languages": ["TypeScript", "JavaScript"],
         "prompt": f"""{_BASE_RULES}
 
-You are a TypeScript/JavaScript expert reviewer.
-Focus on: type safety, React hooks correctness, async/await patterns,
-null safety (optional chaining, nullish coalescing), proper error handling,
-and TypeScript-specific anti-patterns visible in the diff.
+You are a TypeScript and React reviewer.
+Focus on type safety, hooks correctness, async patterns, null safety,
+unsanitized HTML rendering, and browser-side security issues visible in the diff.
 
-Structure:
-1) TypeScript/JS Quality Summary
-2) Type Safety Issues (missing types, any usage, unsafe casts)
-3) React/Hooks Issues (if applicable — only if React is visible in diff)
-4) Suggestions (idiomatic TypeScript/JS improvements)
-5) Verdict: APPROVE / REQUEST_CHANGES""",
+Use this structure:
+## Summary
+## Issues Found
+## Suggestions
+## Verdict""",
     },
     {
         "name": "python_idioms",
         "languages": ["Python"],
         "prompt": f"""{_BASE_RULES}
 
-You are a Python expert reviewer.
-Focus on: Pythonic patterns, type annotations, exception handling,
-PEP 8 compliance, performance pitfalls (N+1, list vs generator),
-and Python-specific anti-patterns visible in the diff.
+You are a Python reviewer.
+Focus on Pythonic patterns, exception handling, type annotations,
+security-sensitive library usage, and maintainability issues visible in the diff.
 
-Structure:
-1) Python Quality Summary
-2) Non-Pythonic Patterns (with idiomatic alternatives)
-3) Type Annotation Issues
-4) Performance Concerns (only if visible in the diff)
-5) Verdict: APPROVE / REQUEST_CHANGES""",
+Use this structure:
+## Summary
+## Issues Found
+## Suggestions
+## Verdict""",
     },
 ]
 
 
 def _strategies_for_language(language: str) -> list[dict]:
-    """
-    Select the two most relevant strategies for the detected language.
-    Always includes security_focus. Adds language-specific strategy when available,
-    otherwise falls back to correctness_focus.
-    """
-    lang_specific = next(
-        (s for s in _ALL_STRATEGIES
-         if language in s["languages"] and s["languages"] != ["*"]),
+    language_specific = next(
+        (
+            strategy for strategy in _ALL_STRATEGIES
+            if language in strategy["languages"] and strategy["languages"] != ["*"]
+        ),
         None,
     )
-    fallback  = next(s for s in _ALL_STRATEGIES if s["name"] == "correctness_focus")
-    security  = next(s for s in _ALL_STRATEGIES if s["name"] == "security_focus")
+    security = next(strategy for strategy in _ALL_STRATEGIES if strategy["name"] == "security_focus")
+    fallback = next(strategy for strategy in _ALL_STRATEGIES if strategy["name"] == "correctness_focus")
 
-    selected = [security, lang_specific or fallback]
+    selected = [security, language_specific or fallback]
     seen: set[str] = set()
-    result = []
-    for s in selected:
-        if s["name"] not in seen:
-            seen.add(s["name"])
-            result.append(s)
-    return result
+    ordered: list[dict] = []
+    for strategy in selected:
+        if strategy["name"] not in seen:
+            seen.add(strategy["name"])
+            ordered.append(strategy)
+    return ordered
 
 
-def _safe_diff(diff: str, max_chars: int = 3500) -> str:
-    if len(diff) <= max_chars:
-        return diff
-    return diff[:max_chars] + "\n\n... [diff truncated for branch review]"
+def _score_lookup(scores: list[CandidateScore]) -> dict[int, CandidateScore]:
+    return {score["candidate_index"]: score for score in scores}
 
 
 def branch_agent(state: BranchAgentInput) -> BranchAgentOutput:
-    t0 = time.perf_counter()
-    diff     = state.get("pr_diff", "")
-    ctx      = state.get("retrieved_context", "")
-    meta     = state.get("pr_metadata", {})
-    lang     = meta.get("language", "Unknown")
-    existing = list(state.get("candidates", []))
-    trace    = list(state.get("trace", []))
+    started_at = time.perf_counter()
+    diff = state.get("pr_diff", "")
+    metadata = state.get("pr_metadata", {})
+    language = metadata.get("language", "Unknown")
+    existing_candidates = list(state.get("candidates", []))
+    existing_scores = _score_lookup(state.get("scores", []))
+    trace = list(state.get("trace", []))
+    strategies = _strategies_for_language(language)[: settings.thresholds.max_branch_alternatives]
+    start_event = log_start(
+        "branch_agent",
+        {
+            "language": language,
+            "strategy_names": [strategy["name"] for strategy in strategies],
+            "existing_candidates": len(existing_candidates),
+        },
+    )
 
-    strategies = _strategies_for_language(lang)[: settings.thresholds.max_branch_alternatives]
-    log_start("branch_agent", {
-        "language": lang,
-        "n_strategies": len(strategies),
-        "strategy_names": [s["name"] for s in strategies],
-        "existing_candidates": len(existing),
-    })
-
+    initial_candidate = existing_candidates[0] if existing_candidates else None
+    initial_score = existing_scores.get(0)
+    diff_selection = prepare_diff_for_prompt(diff, max_chars=3500)
+    files_str = ", ".join(metadata.get("files_changed", [])) or "unknown"
     new_candidates: list[ReviewCandidate] = []
-    files_str = ", ".join(meta.get("files_changed", [])) or "unknown"
 
-    for strategy in strategies:
+    for offset, strategy in enumerate(strategies, start=len(existing_candidates)):
         try:
-            human = f"""## PR Information
-Title: {meta.get('title', 'N/A')}
-Language: {lang}
-Files: {files_str}
+            critique = ""
+            if initial_score:
+                critique = (
+                    f"Initial review score: {initial_score['score']:.1f}\n"
+                    f"Critic rationale: {initial_score['rationale']}\n"
+                    f"Critic identified: {', '.join(initial_score['issues_identified']) or 'none'}"
+                )
 
-## Coding Standards
-{ctx}
+            prompt = f"""## PR Information
+Title: {metadata.get('title', 'N/A')}
+Language: {language}
+Files changed: {files_str}
 
-## Diff to Review
-IMPORTANT: Review ONLY the following diff.
+## Retrieved Guidance
+{state.get('retrieved_context', '')}
+
+## Prior Review To Improve
+{initial_candidate['review'] if initial_candidate else 'No prior review available.'}
+
+## Why Another Strategy Is Needed
+{critique or 'The prior review did not meet the branch threshold.'}
+
+## Diff To Review
 ```diff
-{_safe_diff(diff)}
+{diff_selection.content}
 ```
 
-Please review using your assigned strategy."""
-            resp = invoke_llm(
+Produce a materially different review using your assigned strategy."""
+
+            response = invoke_llm(
                 _llm,
-                [
-                    SystemMessage(content=strategy["prompt"]),
-                    HumanMessage(content=human),
-                ],
+                [SystemMessage(content=strategy["prompt"]), HumanMessage(content=prompt)],
                 agent="branch_agent",
             )
             new_candidates.append({
-                "review": resp.content,
+                "id": f"{strategy['name']}-{offset}",
+                "review": response.content,
                 "strategy": strategy["name"],
-                "score": 0.0,
-                "score_rationale": "",
-                "issues": [],
             })
         except Exception as exc:
-            trace.append(log_error("branch_agent",
-                                   f"strategy '{strategy['name']}' failed: {exc}"))
+            trace.append(log_error("branch_agent", f"strategy '{strategy['name']}' failed: {exc}"))
 
-    ev = log_end("branch_agent", {
-        "strategies_run": [s["name"] for s in strategies],
-        "generated": len(new_candidates),
-        "language": lang,
-    }, (time.perf_counter() - t0) * 1000)
-
+    end_event = log_end(
+        "branch_agent",
+        {
+            "language": language,
+            "strategies_run": [strategy["name"] for strategy in strategies],
+            "generated": len(new_candidates),
+            "included_files": diff_selection.included_files,
+            "omitted_files": diff_selection.omitted_files,
+        },
+        (time.perf_counter() - started_at) * 1000,
+    )
     return {
-        "candidates": existing + new_candidates,
-        "trace": trace + [ev],
+        "candidates": existing_candidates + new_candidates,
+        "trace": trace + [start_event, end_event],
     }

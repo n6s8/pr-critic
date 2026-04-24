@@ -9,14 +9,13 @@ import {
 } from 'react'
 import { parseDiffFiles, getIssueId } from '../lib/diff'
 import { cn, getIssueSeverityTone } from '../lib/utils'
-import type { DiffFile, DiffLine, Issue, TraceEntry } from '../types'
+import type { DiffFile, DiffLine, Issue } from '../types'
 
 const FILE_STATUS_LABELS: Record<DiffFile['status'], string> = {
   modified: 'Modified',
   added: 'Added',
   deleted: 'Deleted',
   renamed: 'Renamed',
-  generated: 'Generated',
 }
 
 const FILE_STATUS_STYLES: Record<DiffFile['status'], string> = {
@@ -24,7 +23,6 @@ const FILE_STATUS_STYLES: Record<DiffFile['status'], string> = {
   added: 'border-emerald-400/20 bg-emerald-400/10 text-emerald-300',
   deleted: 'border-red-400/20 bg-red-400/10 text-red-300',
   renamed: 'border-violet-400/20 bg-violet-400/10 text-violet-200',
-  generated: 'border-amber-400/20 bg-amber-400/10 text-amber-200',
 }
 
 const ISSUE_TONE_STYLES = {
@@ -41,120 +39,11 @@ const DIFF_LINE_STYLES: Record<DiffLine['type'], string> = {
 }
 
 const LANGUAGE_KEYWORDS: Record<string, Set<string>> = {
-  ts: new Set([
-    'const',
-    'let',
-    'var',
-    'return',
-    'function',
-    'if',
-    'else',
-    'for',
-    'while',
-    'switch',
-    'case',
-    'break',
-    'import',
-    'from',
-    'export',
-    'type',
-    'interface',
-    'extends',
-    'async',
-    'await',
-    'class',
-    'new',
-    'null',
-    'undefined',
-    'true',
-    'false',
-  ]),
-  tsx: new Set([
-    'const',
-    'let',
-    'return',
-    'function',
-    'if',
-    'else',
-    'import',
-    'from',
-    'export',
-    'type',
-    'interface',
-    'extends',
-    'async',
-    'await',
-    'class',
-    'null',
-    'true',
-    'false',
-  ]),
-  js: new Set([
-    'const',
-    'let',
-    'var',
-    'return',
-    'function',
-    'if',
-    'else',
-    'for',
-    'while',
-    'switch',
-    'case',
-    'break',
-    'import',
-    'from',
-    'export',
-    'async',
-    'await',
-    'class',
-    'new',
-    'null',
-    'undefined',
-    'true',
-    'false',
-  ]),
-  jsx: new Set([
-    'const',
-    'let',
-    'var',
-    'return',
-    'function',
-    'if',
-    'else',
-    'import',
-    'from',
-    'export',
-    'async',
-    'await',
-    'class',
-    'new',
-    'null',
-    'true',
-    'false',
-  ]),
-  py: new Set([
-    'def',
-    'return',
-    'if',
-    'elif',
-    'else',
-    'for',
-    'while',
-    'try',
-    'except',
-    'class',
-    'import',
-    'from',
-    'with',
-    'as',
-    'pass',
-    'None',
-    'True',
-    'False',
-    'async',
-    'await',
-  ]),
+  ts: new Set(['const', 'let', 'return', 'function', 'if', 'else', 'import', 'from', 'export', 'type', 'interface', 'async', 'await']),
+  tsx: new Set(['const', 'let', 'return', 'function', 'if', 'else', 'import', 'from', 'export', 'type', 'interface', 'async', 'await']),
+  js: new Set(['const', 'let', 'var', 'return', 'function', 'if', 'else', 'import', 'from', 'export', 'async', 'await']),
+  jsx: new Set(['const', 'let', 'var', 'return', 'function', 'if', 'else', 'import', 'from', 'export', 'async', 'await']),
+  py: new Set(['def', 'return', 'if', 'elif', 'else', 'for', 'while', 'try', 'except', 'class', 'import', 'from', 'with', 'as', 'pass', 'None', 'True', 'False', 'async', 'await']),
 }
 
 const TOKEN_RE =
@@ -178,17 +67,9 @@ function highlightCode(content: string, extension: string): ReactNode[] {
     }
 
     let className = 'text-slate-200'
-    if (
-      token.startsWith('//') ||
-      token.startsWith('#') ||
-      token.startsWith('<!--')
-    ) {
+    if (token.startsWith('//') || token.startsWith('#') || token.startsWith('<!--')) {
       className = 'text-slate-500'
-    } else if (
-      token.startsWith('"') ||
-      token.startsWith("'") ||
-      token.startsWith('`')
-    ) {
+    } else if (token.startsWith('"') || token.startsWith("'") || token.startsWith('`')) {
       className = 'text-emerald-300'
     } else if (/^\d/.test(token)) {
       className = 'text-amber-300'
@@ -301,22 +182,20 @@ const DiffLineRow = memo(function DiffLineRow({
 })
 
 interface Props {
-  review: string
+  diff: string
   issues: Issue[]
-  trace: TraceEntry[]
   activeIssueId: string | null
   onActiveIssueChange: (issueId: string | null) => void
 }
 
 function DiffPanelComponent({
-  review,
+  diff,
   issues,
-  trace,
   activeIssueId,
   onActiveIssueChange,
 }: Props) {
   const lineRefs = useRef<Record<string, HTMLDivElement | null>>({})
-  const diffFiles = useMemo(() => parseDiffFiles(review, issues, trace), [review, issues, trace])
+  const diffFiles = useMemo(() => parseDiffFiles(diff, issues), [diff, issues])
   const issueMap = useMemo(
     () => new Map(issues.map(issue => [getIssueId(issue), issue])),
     [issues]
@@ -427,7 +306,7 @@ function DiffPanelComponent({
         <p className="section-label">Diff</p>
         <h2 className="mt-2 text-2xl font-semibold text-white">Code Explorer</h2>
         <p className="mt-3 text-sm leading-7 text-slate-400">
-          No diff context could be derived from the current backend payload.
+          The backend did not return a diff for this analysis.
         </p>
       </section>
     )
@@ -440,7 +319,7 @@ function DiffPanelComponent({
           <p className="section-label">Diff</p>
           <h2 className="mt-2 text-2xl font-semibold text-white">Code Explorer</h2>
           <p className="mt-2 text-sm text-slate-400">
-            File navigator, diff hunks, and issue-linked line anchors rendered from the existing response payload.
+            Raw diff content returned by the backend, with issue anchors mapped where possible.
           </p>
         </div>
 
@@ -522,7 +401,7 @@ function DiffPanelComponent({
 
             {sortedIssues.length === 0 ? (
               <p className="mt-4 text-sm leading-7 text-slate-400">
-                Structured issues will appear here once the review includes findings.
+                No structured issues were extracted from the selected review.
               </p>
             ) : (
               <div className="mt-4 space-y-2">
@@ -585,17 +464,8 @@ function DiffPanelComponent({
                       <span className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[11px] text-slate-300">
                         {selectedFile.hunks.length} hunk{selectedFile.hunks.length === 1 ? '' : 's'}
                       </span>
-                      <span className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[11px] text-slate-300">
-                        {selectedFile.source === 'review' ? 'Review diff' : 'Generated fallback'}
-                      </span>
                     </div>
                   </div>
-
-                  {selectedFile.source === 'generated' && (
-                    <p className="max-w-md text-xs leading-6 text-amber-200/80">
-                      Exact patch lines were not included in the response, so this view is synthesized from issues and trace metadata.
-                    </p>
-                  )}
                 </div>
               </div>
 

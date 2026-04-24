@@ -10,6 +10,7 @@ import { ReviewPanel } from './components/ReviewPanel'
 import { StrategyList } from './components/StrategyList'
 import { TracePanel } from './components/TracePanel'
 import { useReviewState } from './hooks/useReviewState'
+import { buildPipelineSteps } from './lib/utils'
 
 type TabKey = 'review' | 'diff' | 'issues' | 'trace'
 
@@ -20,22 +21,15 @@ const TABS: Array<{ key: TabKey; label: string }> = [
   { key: 'trace', label: 'Trace' },
 ]
 
-function LoadingState({
-  steps,
-  prUrl,
-}: {
-  steps: ReturnType<typeof useReviewState>['pipelineSteps']
-  prUrl: string
-}) {
+function LoadingState({ prUrl }: { prUrl: string }) {
   return (
     <div className="surface-panel flex min-h-[420px] flex-col justify-center rounded-3xl p-8">
-      <div className="mx-auto w-full max-w-6xl text-center">
+      <div className="mx-auto w-full max-w-4xl text-center">
         <p className="section-label">Pipeline</p>
         <h2 className="mt-3 text-3xl font-semibold text-white">Analyzing PR...</h2>
         <p className="mt-3 text-sm text-slate-400">
-          Simulating the live execution path for {prUrl || 'your pull request'}.
+          Waiting for the backend to return the completed review for {prUrl || 'your pull request'}.
         </p>
-        <PipelineLoader steps={steps} />
       </div>
     </div>
   )
@@ -59,13 +53,13 @@ function EmptyState({
         Analyze a pull request diff
       </h1>
       <p className="mx-auto mt-4 max-w-2xl text-base leading-8 text-slate-400">
-        Paste a GitHub diff URL to inspect score, strategies, structured issues,
-        generated diff context, and the full execution timeline in one place.
+        Paste a GitHub PR URL, mock PR URL, or raw diff input to inspect the
+        real backend review output, candidate set, trace, and diff content.
       </p>
 
       <div className="mx-auto mt-8 max-w-3xl rounded-[28px] border border-white/10 bg-black/20 p-4 shadow-[0_24px_64px_rgba(2,6,23,0.28)]">
         <label className="section-label" htmlFor="empty-pr-url-input">
-          Diff URL
+          PR URL or Diff Source
         </label>
         <div className="mt-3 flex flex-col gap-3 sm:flex-row">
           <input
@@ -73,7 +67,7 @@ function EmptyState({
             value={prUrl}
             onChange={event => onPrUrlChange(event.target.value)}
             onKeyDown={event => event.key === 'Enter' && onAnalyze()}
-            placeholder="https://github.com/org/repo/pull/123.diff"
+            placeholder="https://github.com/org/repo/pull/123"
             className="h-14 flex-1 rounded-2xl border border-white/10 bg-black/25 px-5 text-[15px] text-white outline-none transition placeholder:text-slate-500 focus:border-emerald-400/50 focus:ring-2 focus:ring-emerald-400/20"
           />
           <button
@@ -129,7 +123,7 @@ function ResultTopBar({
             value={prUrl}
             onChange={event => onPrUrlChange(event.target.value)}
             onKeyDown={event => event.key === 'Enter' && onAnalyze()}
-            placeholder="https://github.com/org/repo/pull/123.diff"
+            placeholder="https://github.com/org/repo/pull/123"
             className="h-11 flex-1 rounded-2xl border border-white/10 bg-black/20 px-4 text-sm text-white outline-none transition placeholder:text-slate-500 focus:border-emerald-400/50 focus:ring-2 focus:ring-emerald-400/20"
           />
           <button
@@ -145,22 +139,18 @@ function ResultTopBar({
   )
 }
 
-function ExecutionStrip({
-  steps,
-}: {
-  steps: ReturnType<typeof useReviewState>['pipelineSteps']
-}) {
+function ExecutionStrip({ steps }: { steps: ReturnType<typeof buildPipelineSteps> }) {
   return (
     <div className="border-b border-white/10 px-6 py-5">
       <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
         <div>
           <p className="section-label">Execution</p>
           <p className="mt-2 text-sm text-slate-400">
-            Frontend-simulated pipeline matched to the backend response lifecycle.
+            This pipeline view is derived directly from the backend trace.
           </p>
         </div>
         <span className="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-3 py-1 text-xs font-medium text-emerald-200">
-          4 stages completed
+          {steps.length} traced stages
         </span>
       </div>
       <div className="mt-4">
@@ -178,30 +168,30 @@ export default function App() {
     data,
     loading,
     error,
-    activeStrategyId,
+    activeCandidateIndex,
     expandedAgents,
-    pipelineSteps,
     activeIssueId,
     setPrUrl,
     analyze,
-    setActiveStrategy,
+    setActiveCandidate,
     setActiveIssue,
     toggleAgent,
     expandAll,
     collapseAll,
   } = useReviewState()
 
-  const strategies = data?.strategies ?? []
-  const issues = data?.issues ?? []
-  const trace = data?.trace ?? []
-  const review = data?.review ?? ''
+  const candidates = useMemo(() => data?.candidates ?? [], [data?.candidates])
+  const issues = useMemo(() => data?.issues ?? [], [data?.issues])
+  const trace = useMemo(() => data?.trace ?? [], [data?.trace])
+  const selectedReview = data?.selected_review ?? null
+  const pipelineSteps = useMemo(() => buildPipelineSteps(trace), [trace])
 
-  const activeStrategy = useMemo(
+  const activeCandidate = useMemo(
     () =>
-      strategies.find(strategy => strategy.id === activeStrategyId) ??
-      strategies[0] ??
+      candidates.find(candidate => candidate.index === activeCandidateIndex) ??
+      selectedReview ??
       null,
-    [activeStrategyId, strategies]
+    [activeCandidateIndex, candidates, selectedReview]
   )
 
   const handleAnalyze = useCallback(() => {
@@ -212,10 +202,10 @@ export default function App() {
     analyze(nextUrl)
   }, [analyze, prUrl])
 
-  const handleSelectStrategy = useCallback((id: string) => {
-    setActiveStrategy(id)
+  const handleSelectCandidate = useCallback((index: number) => {
+    setActiveCandidate(index)
     startTransition(() => setActiveTab('review'))
-  }, [setActiveStrategy])
+  }, [setActiveCandidate])
 
   const handleTabChange = useCallback((tab: TabKey) => {
     startTransition(() => setActiveTab(tab))
@@ -265,12 +255,15 @@ export default function App() {
 
         <main className="mt-3 min-h-0 min-w-0 overflow-y-auto pr-1">
           {loading ? (
-            <LoadingState steps={pipelineSteps} prUrl={lastAnalyzedUrl || prUrl} />
+            <LoadingState prUrl={lastAnalyzedUrl || prUrl} />
           ) : error ? (
             <ErrorState message={error} />
           ) : data ? (
             <section className="surface-panel overflow-hidden rounded-[28px]">
-              <PRContextHeader prUrl={lastAnalyzedUrl || prUrl} trace={trace} />
+              <PRContextHeader
+                prMetadata={data.pr_metadata}
+                diffSize={data.diff_size}
+              />
               <ExecutionStrip steps={pipelineSteps} />
 
               <div className="flex flex-wrap items-center gap-3 border-b border-white/10 px-6 py-5">
@@ -280,8 +273,6 @@ export default function App() {
                       ? issues.length
                       : tab.key === 'trace'
                       ? trace.length
-                      : tab.key === 'diff'
-                      ? undefined
                       : undefined
 
                   return (
@@ -301,23 +292,35 @@ export default function App() {
                 })}
               </div>
 
-              <MetricsBar issues={issues} />
+              <MetricsBar
+                issues={issues}
+                score={data.score}
+                candidateCount={candidates.length}
+                branchTaken={data.branch_taken}
+                branchImprovement={data.branch_improvement}
+              />
               <StrategyList
-                strategies={strategies}
-                activeId={activeStrategyId}
-                onSelect={handleSelectStrategy}
+                candidates={candidates}
+                activeIndex={activeCandidateIndex}
+                selectedIndex={data.selected_index}
+                selectorReason={data.selector_reason}
+                onSelect={handleSelectCandidate}
               />
 
               <div key={activeTab} className="tab-panel p-6">
                 {activeTab === 'review' && (
-                  <ReviewPanel strategy={activeStrategy} review={review} />
+                  <ReviewPanel
+                    candidate={activeCandidate}
+                    isSelected={activeCandidate?.index === data.selected_index}
+                    selectorReason={data.selector_reason}
+                    retrieval={data.retrieval}
+                  />
                 )}
 
                 {activeTab === 'diff' && (
                   <DiffPanel
-                    review={review}
+                    diff={data.diff}
                     issues={issues}
-                    trace={trace}
                     activeIssueId={activeIssueId}
                     onActiveIssueChange={handleSelectIssue}
                   />
