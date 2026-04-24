@@ -34,8 +34,9 @@ app = FastAPI(title="PR Critic", version="0.3.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.api.cors_allowed_origins,
-    allow_methods=["GET", "POST"],
-    allow_headers=["Content-Type", "Authorization", "X-Request-ID"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 _api_log = get_logger("pr_critic.api")

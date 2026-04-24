@@ -107,7 +107,12 @@ class Settings(BaseSettings):
     pr_cache_ttl_seconds: int = Field(default=120, validation_alias="PR_CACHE_TTL_SECONDS")
     rag_cache_ttl_seconds: int = Field(default=300, validation_alias="RAG_CACHE_TTL_SECONDS")
     cors_allowed_origins_raw: str = Field(
-        default="http://127.0.0.1:5173,http://localhost:5173",
+        default=(
+            "https://pr-critic.vercel.app,"
+            "http://localhost:5173,"
+            "http://127.0.0.1:5173,"
+            "http://localhost:3000"
+        ),
         validation_alias="CORS_ALLOWED_ORIGINS",
     )
 
