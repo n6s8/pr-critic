@@ -1,0 +1,9 @@
+Category: security
+SECTION: React XSS
+React components must not render unsanitized HTML. `dangerouslySetInnerHTML`, `innerHTML`, and template-based HTML insertion require sanitization and a clear trust boundary.
+---
+SECTION: Hooks Correctness
+React hooks must include all external values in dependency arrays unless the code intentionally stabilizes them. Missing dependencies can cause stale data, incorrect fetches, and inconsistent UI state.
+---
+SECTION: Type Safety
+Avoid `any` for externally supplied data. Validate unknown input at boundaries and narrow types before rendering or business logic.

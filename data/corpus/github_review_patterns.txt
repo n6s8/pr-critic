@@ -1,0 +1,9 @@
+Category: review
+SECTION: Grounded PR Review
+A useful pull request review cites changed files, line numbers, and snippets. Do not raise issues from code that is not visible in the diff. Avoid generic style advice when a concrete defect is present.
+---
+SECTION: False Positive Control
+Reject review findings that cannot be tied to changed lines. A finding should include file, line, issue type, changed code evidence, and a source or rationale.
+---
+SECTION: Large PR Review
+For large diffs, prioritize high-risk files and explicitly state partial coverage. Security, data access, authentication, authorization, and error handling should be reviewed first.

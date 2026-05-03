@@ -74,6 +74,10 @@ function ReviewPanelComponent({
   selectorReason,
   retrieval,
 }: Props) {
+  const isFallbackCandidate = candidate?.strategy.startsWith('fallback_') ?? false
+  const isRateLimitFallback =
+    candidate?.strategy === 'fallback_rate_limited' ||
+    candidate?.review.trim() === 'LLM unavailable due to rate limit'
   const sections = useMemo(
     () => parseSections(candidate?.review ?? ''),
     [candidate?.review]
@@ -103,6 +107,13 @@ function ReviewPanelComponent({
           {isSelected && selectorReason && (
             <p className="mt-3 rounded-2xl border border-white/10 bg-black/15 px-4 py-3 text-sm leading-7 text-slate-300">
               {selectorReason}
+            </p>
+          )}
+          {isFallbackCandidate && (
+            <p className="mt-3 rounded-2xl border border-amber-400/30 bg-amber-400/10 px-4 py-3 text-sm leading-7 text-amber-100">
+              {isRateLimitFallback
+                ? 'The provider rate-limited this request. This candidate is a degraded fallback, not a model-generated review.'
+                : 'The model review could not be generated cleanly. This candidate is a degraded fallback.'}
             </p>
           )}
         </div>

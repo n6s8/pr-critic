@@ -10,9 +10,13 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_groq import ChatGroq
 
 from backend.config import settings
+from backend.errors import LLMRateLimitError
 from backend.graph.state import CandidateScore, SelectorAgentInput, SelectorAgentOutput
 from backend.observability.logger import log_end, log_error, log_start, log_structured
-from backend.utils.diff import prepare_diff_for_prompt
+from backend.security import mask_pii
+from backend.utils.diff import SMART_SELECTOR_TOKEN_BUDGET, build_reasoning_diff_packet
+from backend.utils.grounding import render_grounded_review
+from backend.utils.issues import file_paths_match
 from backend.utils.resilience import invoke_llm
 
 _llm = ChatGroq(**settings.models.selector.groq_kwargs(api_key=settings.groq_api_key))
@@ -35,6 +39,10 @@ def _build_selector_reason(
     raw_rationale: str,
 ) -> str:
     if len(candidates) == 1:
+        if candidates[0].get("strategy") == "fallback_rate_limited":
+            return "LLM unavailable due to rate limit; returning the fallback candidate."
+        if candidates[0].get("strategy", "").startswith("fallback_"):
+            return "Review generation degraded; returning the fallback candidate."
         return "Selected the only candidate returned by the pipeline."
 
     selected_candidate = candidates[selected_index]
@@ -93,10 +101,41 @@ def _compute_branch_improvement(
     return round(float(selected_score["score"]) - float(initial_score["score"]), 2)
 
 
+def _dedupe_grounded_issues(candidate_grounded: dict[str, list[dict]]) -> list[dict]:
+    deduped: list[dict] = []
+    for issues in candidate_grounded.values():
+        for issue in issues:
+            issue_type = str(issue.get("issue_type", "unknown"))
+            file_path = str(issue.get("file", "unknown"))
+            if any(
+                issue_type == str(existing.get("issue_type", "unknown"))
+                and file_paths_match(file_path, str(existing.get("file", "unknown")))
+                for existing in deduped
+            ):
+                continue
+            deduped.append(issue)
+    severity_rank = {"critical": 0, "warning": 1, "info": 2}
+    return sorted(
+        deduped,
+        key=lambda issue: (
+            severity_rank.get(str(issue.get("severity", "info")), 3),
+            str(issue.get("file", "")),
+            int(issue.get("line") or 0),
+        ),
+    )
+
+
 def _rerank(state: SelectorAgentInput) -> tuple[int, str]:
     candidates = state.get("candidates", [])
     score_lookup = _score_lookup(state.get("scores", []))
-    diff_excerpt = prepare_diff_for_prompt(state.get("pr_diff", ""), max_chars=1000).content
+    diff_excerpt = build_reasoning_diff_packet(
+        state.get("pr_diff", ""),
+        token_budget=SMART_SELECTOR_TOKEN_BUDGET,
+        max_files=6,
+        max_chunks=2,
+        max_lines_per_chunk=80,
+        max_chars_per_chunk=900,
+    ).content
     summaries = "\n\n".join(
         (
             f"[{index}] strategy={candidate['strategy']} "
@@ -108,7 +147,7 @@ def _rerank(state: SelectorAgentInput) -> tuple[int, str]:
     )
     prompt = f"""## Diff
 ```diff
-{diff_excerpt}
+{mask_pii(diff_excerpt)}
 ```
 
 ## Candidates
@@ -138,6 +177,7 @@ def selector_agent(state: SelectorAgentInput) -> SelectorAgentOutput:
         {
             "candidate_count": len(candidates),
             "score_count": len(scores),
+            "filtered_diff_used": True,
         },
     )
 
@@ -147,16 +187,53 @@ def selector_agent(state: SelectorAgentInput) -> SelectorAgentOutput:
             "selected_index": None,
             "selector_reason": "No candidates were produced by the pipeline.",
             "branch_improvement": None,
+            "rate_limited": bool(state.get("rate_limited", False)),
+            "large_pr_mode": bool(state.get("large_pr_mode", False)),
+            "repo_signals": state.get("repo_signals"),
+            "request_cache_key": str(state.get("request_cache_key", "")),
+            "branch_skipped_reason": str(state.get("branch_skipped_reason", "")),
+            "review_plan": state.get("review_plan", {}),
+            "safety_flags": state.get("safety_flags", {}),
+            "candidate_grounded_issues": state.get("candidate_grounded_issues", {}),
+            "grounded_issues": state.get("grounded_issues", []),
+            "synthesis_report": state.get("synthesis_report", {}),
+            "agent_messages": state.get("agent_messages", []),
             "trace": trace + [start_event, error_event],
         }
 
     score_lookup = _score_lookup(scores)
     branch_taken = bool(state.get("branch_taken", False))
+    rate_limited = bool(state.get("rate_limited", False))
     try:
-        if len(candidates) == 1:
-            selected_index, rationale = 0, "Selected the only candidate returned by the pipeline."
+        if len(candidates) == 1 or rate_limited:
+            if candidates[0].get("strategy") == "fallback_rate_limited":
+                selected_index, rationale = 0, "LLM unavailable due to rate limit; returning the fallback candidate."
+            elif len(candidates) == 1 and candidates[0].get("strategy", "").startswith("fallback_"):
+                selected_index, rationale = 0, "Review generation degraded; returning the fallback candidate."
+            elif rate_limited:
+                selected_index = max(
+                    range(len(candidates)),
+                    key=lambda index: score_lookup.get(index, {}).get("score", 0.0),
+                )
+                rationale = "Rate limited: selected the highest scored candidate without reranking."
+            else:
+                selected_index, rationale = 0, "Selected the only candidate returned by the pipeline."
         else:
             selected_index, rationale = _rerank(state)
+    except LLMRateLimitError as exc:
+        rate_limited = True
+        log_structured(
+            "WARNING",
+            "selector_rate_limited",
+            agent="selector_agent",
+            retry_after_seconds=exc.retry_after_seconds,
+            rate_limited=True,
+        )
+        selected_index = max(
+            range(len(candidates)),
+            key=lambda index: score_lookup.get(index, {}).get("score", 0.0),
+        )
+        rationale = "Rate limited: selected the highest scored candidate without reranking."
     except Exception as exc:
         log_structured(
             "WARNING",
@@ -174,6 +251,20 @@ def selector_agent(state: SelectorAgentInput) -> SelectorAgentOutput:
     selected_score = score_lookup.get(selected_index, {}).get("score", 0.0)
     selector_reason = _build_selector_reason(candidates, score_lookup, selected_index, rationale)
     branch_improvement = _compute_branch_improvement(score_lookup, selected_index, branch_taken)
+    candidate_grounded = state.get("candidate_grounded_issues", {})
+    grounded_union = _dedupe_grounded_issues(candidate_grounded) if isinstance(candidate_grounded, dict) else []
+    final_candidates = [dict(candidate) for candidate in candidates]
+    selected_grounded = (
+        grounded_union
+        or (candidate_grounded.get(str(selected_index), []) if isinstance(candidate_grounded, dict) else [])
+    )
+    if selected_grounded:
+        final_candidates[selected_index]["review"] = render_grounded_review(
+            candidates[selected_index].get("review", ""),
+            selected_grounded,
+        )
+        if grounded_union:
+            selector_reason = f"{selector_reason} Synthesized {len(grounded_union)} grounded issue(s) across candidates."
     end_event = log_end(
         "selector_agent",
         {
@@ -182,12 +273,39 @@ def selector_agent(state: SelectorAgentInput) -> SelectorAgentOutput:
             "selected_score": selected_score,
             "selector_reason": selector_reason,
             "branch_improvement": branch_improvement,
+            "rate_limited": rate_limited,
+            "large_pr_mode": bool(state.get("large_pr_mode", False)),
+            "branch_skipped_reason": str(state.get("branch_skipped_reason", "")),
+            "filtered_diff_used": True,
+            "synthesized_grounded_issues": len(grounded_union),
         },
         (time.perf_counter() - started_at) * 1000,
     )
     return {
+        "candidates": final_candidates,
         "selected_index": selected_index,
         "selector_reason": selector_reason,
         "branch_improvement": branch_improvement,
+        "rate_limited": rate_limited,
+        "large_pr_mode": bool(state.get("large_pr_mode", False)),
+        "repo_signals": state.get("repo_signals"),
+        "request_cache_key": str(state.get("request_cache_key", "")),
+        "branch_skipped_reason": str(state.get("branch_skipped_reason", "")),
+        "review_plan": state.get("review_plan", {}),
+        "safety_flags": state.get("safety_flags", {}),
+        "candidate_grounded_issues": candidate_grounded,
+        "grounded_issues": selected_grounded,
+        "synthesis_report": state.get("synthesis_report", {}),
+        "agent_messages": list(state.get("agent_messages", [])) + [
+            {
+                "agent": "selector_agent",
+                "artifact_type": "FinalDecision",
+                "summary": {
+                    "selected_index": selected_index,
+                    "selected_strategy": candidates[selected_index]["strategy"],
+                    "selector_reason": selector_reason,
+                },
+            }
+        ],
         "trace": trace + [start_event, end_event],
     }

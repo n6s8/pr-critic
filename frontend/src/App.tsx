@@ -84,14 +84,21 @@ function EmptyState({
 }
 
 function ErrorState({ message }: { message: string }) {
+  const isRateLimited = /rate limit|retry shortly|retry in about/i.test(message)
+
   return (
     <div className="surface-panel flex min-h-[420px] flex-col justify-center rounded-3xl border border-red-500/30 p-8">
-      <p className="section-label">Request Error</p>
+      <p className="section-label">{isRateLimited ? 'Rate Limit' : 'Request Error'}</p>
       <h2 className="mt-3 text-2xl font-semibold text-white">
-        Unable to render review results
+        {isRateLimited ? 'Model temporarily unavailable' : 'Review could not be generated'}
       </h2>
       <p className="mt-3 max-w-2xl text-sm leading-7 text-slate-300">
         {message}
+      </p>
+      <p className="mt-3 max-w-2xl text-sm leading-7 text-slate-500">
+        {isRateLimited
+          ? 'The backend returned an explicit rate-limit failure instead of pretending to have generated a review.'
+          : 'The backend returned a failure instead of a review payload, so no synthetic review is shown.'}
       </p>
     </div>
   )

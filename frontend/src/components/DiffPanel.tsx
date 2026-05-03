@@ -205,24 +205,13 @@ function DiffPanelComponent({
     const targets = new Map<string, { fileId: string; lineId: string }>()
 
     for (const file of diffFiles) {
-      let firstLineId = ''
-
       for (const hunk of file.hunks) {
         for (const line of hunk.lines) {
-          if (!firstLineId) firstLineId = line.id
-
           for (const issueId of line.issueIds) {
             if (!targets.has(issueId)) {
               targets.set(issueId, { fileId: file.id, lineId: line.id })
             }
           }
-        }
-      }
-
-      for (const issue of file.issues) {
-        const issueId = getIssueId(issue)
-        if (!targets.has(issueId) && firstLineId) {
-          targets.set(issueId, { fileId: file.id, lineId: firstLineId })
         }
       }
     }
@@ -242,11 +231,16 @@ function DiffPanelComponent({
       if (activeIssueId) {
         const activeTarget = issueTargets.get(activeIssueId)
         if (activeTarget) return activeTarget.fileId
+
+        if (issueMap.has(activeIssueId)) {
+          const matchedFile = diffFiles.find(file => file.issues.some(issue => getIssueId(issue) === activeIssueId))
+          if (matchedFile) return matchedFile.id
+        }
       }
 
       return diffFiles.some(file => file.id === current) ? current : diffFiles[0].id
     })
-  }, [activeIssueId, diffFiles, issueTargets])
+  }, [activeIssueId, diffFiles, issueMap, issueTargets])
 
   const selectedFile = useMemo(
     () => diffFiles.find(file => file.id === selectedFileId) ?? diffFiles[0] ?? null,

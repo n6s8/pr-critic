@@ -104,6 +104,9 @@ const IssueCard = memo(function IssueCard({
             <span className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide ${styles.badge}`}>
               {tone}
             </span>
+            <span className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[10px] font-mono text-slate-400">
+              {issue.issue_type}
+            </span>
             <span className="truncate font-mono text-sm text-slate-300">
               {issue.file}:{issue.line}
             </span>
@@ -217,7 +220,7 @@ function IssuesPanelComponent({
 
         if (!normalizedQuery) return true
 
-        return `${issue.file} ${issue.message} ${issue.line}`
+        return `${issue.file} ${issue.issue_type} ${issue.message} ${issue.line} ${issue.source_id ?? ''} ${issue.code_snippet ?? ''}`
           .toLowerCase()
           .includes(normalizedQuery)
       }),
@@ -253,7 +256,9 @@ function IssuesPanelComponent({
 
   const handleCopy = async (issue: Issue) => {
     const issueId = getIssueId(issue)
-    const payload = `[${getIssueSeverityTone(issue.severity).toUpperCase()}] ${issue.file}:${issue.line}\n${issue.message}`
+    const evidence = issue.code_snippet ? `\nEvidence: ${issue.code_snippet}` : ''
+    const source = issue.source_id ? `\nSource: ${issue.source_id}` : ''
+    const payload = `[${getIssueSeverityTone(issue.severity).toUpperCase()}] ${issue.file}:${issue.line}\n${issue.message}${evidence}${source}`
 
     try {
       await navigator.clipboard.writeText(payload)
@@ -371,6 +376,9 @@ function IssuesPanelComponent({
                 <span className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide ${SEVERITY_STYLES[getIssueSeverityTone(selectedIssue.severity)].badge}`}>
                   {getIssueSeverityTone(selectedIssue.severity)}
                 </span>
+                <span className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[10px] font-mono text-slate-400">
+                  {selectedIssue.issue_type}
+                </span>
                 <span className="font-mono text-sm text-slate-300">
                   {selectedIssue.file}:{selectedIssue.line}
                 </span>
@@ -379,6 +387,21 @@ function IssuesPanelComponent({
               <p className="mt-4 text-sm leading-7 text-slate-200">
                 {selectedIssue.message}
               </p>
+
+              {(selectedIssue.code_snippet || selectedIssue.source_id) && (
+                <div className="mt-4 grid gap-3 xl:grid-cols-[minmax(0,1fr)_auto]">
+                  {selectedIssue.code_snippet && (
+                    <pre className="overflow-x-auto rounded-2xl border border-white/10 bg-black/25 p-3 text-xs leading-5 text-slate-300">
+                      <code>{selectedIssue.code_snippet}</code>
+                    </pre>
+                  )}
+                  {selectedIssue.source_id && (
+                    <span className="h-fit rounded-full border border-emerald-400/20 bg-emerald-400/10 px-3 py-1.5 font-mono text-[11px] text-emerald-200">
+                      {selectedIssue.source_id}
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
 
             <div className="flex gap-2">

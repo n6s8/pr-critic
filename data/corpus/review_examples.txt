@@ -10,18 +10,18 @@ Diff:
 +    return db.execute(query)
 
 Good Review:
-CRITICAL (Security — A03): SQL injection on line 2. user_id is interpolated directly into the query. An attacker can pass "1 OR 1=1" to dump all rows, or "1; DROP TABLE users" to destroy data.
+CRITICAL (Security - A03): SQL injection on line 2. user_id is interpolated directly into the query. An attacker can pass "1 OR 1=1" to dump all rows, or "1; DROP TABLE users" to destroy data.
 Fix: cursor.execute("SELECT * FROM users WHERE id = ?", (user_id,))
 Reference: OWASP A03 Injection
 
 ---
 SECTION: Hardcoded Secret
 Diff:
-+API_KEY = "sk-1234567890abcdef1234567890abcdef"
++API_KEY = "EXAMPLE_API_KEY_DO_NOT_USE"
 +headers = {"Authorization": f"Bearer {API_KEY}"}
 
 Good Review:
-CRITICAL (Security — A07): Hardcoded API key on line 1. This will be committed to git history and may be exposed publicly. Rotate this key immediately.
+CRITICAL (Security - A07): Hardcoded API key on line 1. This will be committed to git history and may be exposed publicly. Rotate this key immediately.
 Fix: API_KEY = os.environ.get("API_KEY") and add to .env (gitignored).
 Reference: OWASP A07
 
@@ -31,7 +31,7 @@ Diff:
 +if user.password == hashlib.md5(password.encode()).hexdigest():
 
 Good Review:
-CRITICAL (Security — A02): MD5 is a broken hash function easily reversed with rainbow tables.
+CRITICAL (Security - A02): MD5 is a broken hash function easily reversed with rainbow tables.
 Fix: Use bcrypt.checkpw(password.encode(), user.password_hash)
 Reference: OWASP A02 Cryptographic Failures
 
@@ -71,7 +71,7 @@ Diff:
 +    os.system(f"ping -c 1 {hostname}")
 
 Good Review:
-CRITICAL (Security — A03): OS command injection. If hostname contains semicolons or pipes, the shell executes arbitrary commands.
+CRITICAL (Security - A03): OS command injection. If hostname contains semicolons or pipes, the shell executes arbitrary commands.
 Fix: subprocess.run(["ping", "-c", "1", hostname], check=True)
 Reference: OWASP A03 Injection
 

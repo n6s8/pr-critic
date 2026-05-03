@@ -42,12 +42,21 @@ from evaluation.metrics import (
     format_summary_table,
     make_run_result,
 )
+from evaluation.real_world_cases import load_real_world_cases
 from evaluation.scenarios import SCENARIOS
 
 
 _DIFF_BLOCK_RE = re.compile(r"```diff\s*([\s\S]*?)```", re.IGNORECASE)
 _FILE_HEADER_RE = re.compile(r"^\+\+\+\s+b/(.+)$")
 _DEF_RE = re.compile(r"^\+def\s+([A-Za-z_]\w*)\((.*?)\)(?:\s*->\s*[^:]+)?:")
+
+
+def _issue_record(*, file: str, issue_type: str, description: str) -> dict[str, str]:
+    return {
+        "file": file,
+        "type": issue_type,
+        "description": description,
+    }
 
 
 def _mock_response(content: str) -> SimpleNamespace:
@@ -104,11 +113,10 @@ def _heuristic_findings(diff: str) -> list[dict[str, object]]:
         message: str,
         *,
         suggestion: str,
-        kind: str,
-        keywords: list[str],
+        issue_type: str,
         tags: list[str],
     ) -> None:
-        key = (kind, file_path)
+        key = (issue_type, file_path)
         if key in seen:
             return
         seen.add(key)
@@ -119,8 +127,7 @@ def _heuristic_findings(diff: str) -> list[dict[str, object]]:
                 "line": line_no,
                 "message": message,
                 "suggestion": suggestion,
-                "kind": kind,
-                "keywords": keywords,
+                "type": issue_type,
                 "tags": tags,
             }
         )
@@ -140,8 +147,7 @@ def _heuristic_findings(diff: str) -> list[dict[str, object]]:
                 line_no,
                 "SQL injection risk from interpolated user input; use parameterized queries.",
                 suggestion="Bind parameters instead of formatting user-controlled values into SQL.",
-                kind="sql_injection",
-                keywords=["sql injection", "parameterized", "owasp"],
+                issue_type="sql_injection",
                 tags=["security"],
             )
 
@@ -152,8 +158,7 @@ def _heuristic_findings(diff: str) -> list[dict[str, object]]:
                 line_no,
                 "MD5 is not appropriate for password hashing; use a password-specific KDF such as bcrypt or Argon2.",
                 suggestion="Replace MD5 with bcrypt or Argon2 and store a salted hash.",
-                kind="md5_password",
-                keywords=["md5", "bcrypt", "cryptographic", "password", "owasp"],
+                issue_type="weak_password_hash",
                 tags=["security", "python"],
             )
 
@@ -168,8 +173,7 @@ def _heuristic_findings(diff: str) -> list[dict[str, object]]:
                 line_no,
                 "Hardcoded secret or credential is committed in source control.",
                 suggestion="Move secrets to environment-backed configuration and rotate exposed credentials.",
-                kind="hardcoded_secret",
-                keywords=["hardcoded", "secret", "environment", "token", "owasp"],
+                issue_type="hardcoded_secret",
                 tags=["security"],
             )
 
@@ -180,9 +184,38 @@ def _heuristic_findings(diff: str) -> list[dict[str, object]]:
                 line_no,
                 "Shell command is built from input without validation, which creates command injection risk.",
                 suggestion="Use subprocess with an argument list and validate the input before execution.",
-                kind="command_injection",
-                keywords=["command injection", "subprocess", "os.system", "shell", "owasp"],
+                issue_type="command_injection",
                 tags=["security", "python"],
+            )
+
+        if "todo" in line_lower and "validation" in line_lower:
+            add(
+                "MAJOR",
+                file_path,
+                line_no,
+                "Input handling is introduced with validation left as a TODO.",
+                suggestion="Validate required fields and reject malformed input before routing or business logic.",
+                issue_type="missing_validation",
+                tags=["security", "correctness", "javascript"],
+            )
+
+        if (
+            "global[" in line_lower
+            and (
+                "require" in line_lower
+                or "string.fromcharcode" in line_lower
+                or "function(" in line_lower
+                or "line truncated for token budget" in line_lower
+            )
+        ):
+            add(
+                "CRITICAL",
+                file_path,
+                line_no,
+                "Obfuscated JavaScript mutates globals and dynamically exposes require.",
+                suggestion="Remove the obfuscated payload and replace it with readable, reviewable route code.",
+                issue_type="obfuscated_code",
+                tags=["security", "javascript"],
             )
 
         if "pickle.loads(" in line_lower:
@@ -192,8 +225,7 @@ def _heuristic_findings(diff: str) -> list[dict[str, object]]:
                 line_no,
                 "Untrusted pickle deserialization can execute arbitrary code.",
                 suggestion="Do not unpickle user-controlled data; prefer a safe format such as JSON.",
-                kind="pickle_deserialization",
-                keywords=["pickle", "deserialization", "untrusted", "json", "owasp"],
+                issue_type="unsafe_deserialization",
                 tags=["security", "python"],
             )
 
@@ -204,8 +236,7 @@ def _heuristic_findings(diff: str) -> list[dict[str, object]]:
                 line_no,
                 "Security-sensitive token generation uses random instead of a cryptographically secure source.",
                 suggestion="Use the secrets module for session IDs and reset tokens.",
-                kind="insecure_random",
-                keywords=["random", "secrets", "cryptographic", "token", "predictable"],
+                issue_type="insecure_random",
                 tags=["security", "python"],
             )
 
@@ -216,8 +247,18 @@ def _heuristic_findings(diff: str) -> list[dict[str, object]]:
                 line_no,
                 "Bare except hides real failures and swallows unexpected exceptions.",
                 suggestion="Catch specific exception types and log or propagate the error.",
-                kind="bare_except",
-                keywords=["bare except", "exception", "specific", "pep 8"],
+                issue_type="bare_except",
+                tags=["style", "python"],
+            )
+
+        if stripped == "except BaseException:" or stripped.startswith("except Exception"):
+            add(
+                "MAJOR",
+                file_path,
+                line_no,
+                "Broad exception handling silently hides real failures.",
+                suggestion="Catch specific exception types and assert or log failures instead of passing.",
+                issue_type="broad_exception",
                 tags=["style", "python"],
             )
 
@@ -228,8 +269,7 @@ def _heuristic_findings(diff: str) -> list[dict[str, object]]:
                 line_no,
                 "Compare against None with 'is' / 'is not' instead of equality operators.",
                 suggestion="Use 'is None' and 'is not None' for identity checks.",
-                kind="none_comparison",
-                keywords=["none", "is not", "comparison", "pep 8"],
+                issue_type="none_comparison",
                 tags=["style", "python"],
             )
 
@@ -243,8 +283,7 @@ def _heuristic_findings(diff: str) -> list[dict[str, object]]:
                     line_no,
                     "Public function is missing type annotations, which makes the API contract harder to use safely.",
                     suggestion="Add parameter and return annotations for public functions.",
-                    kind="missing_type_hints",
-                    keywords=["type", "annotation", "hints", "pep 8"],
+                    issue_type="missing_type_hints",
                     tags=["style", "python"],
                 )
 
@@ -255,8 +294,7 @@ def _heuristic_findings(diff: str) -> list[dict[str, object]]:
                 line_no,
                 "Mutable default argument will be shared across calls.",
                 suggestion="Default to None and create a new container inside the function.",
-                kind="mutable_default",
-                keywords=["mutable", "default", "none", "pep 8"],
+                issue_type="mutable_default_argument",
                 tags=["style", "python"],
             )
 
@@ -267,8 +305,7 @@ def _heuristic_findings(diff: str) -> list[dict[str, object]]:
             5,
             "Object is fetched directly from a request parameter without an authorization check.",
             suggestion="Verify the current user is allowed to access the requested record before returning it.",
-            kind="broken_access_control",
-            keywords=["access control", "authorization", "permission", "current_user", "owasp"],
+            issue_type="broken_access_control",
             tags=["security"],
         )
 
@@ -279,8 +316,7 @@ def _heuristic_findings(diff: str) -> list[dict[str, object]]:
             1,
             "process_order handles validation, pricing, payment, persistence, and notifications in one function.",
             suggestion="Split the flow into smaller units so each step can be tested and changed independently.",
-            kind="god_function",
-            keywords=["single responsibility", "too many", "refactor", "extract"],
+            issue_type="god_function",
             tags=["design"],
         )
 
@@ -291,8 +327,7 @@ def _heuristic_findings(diff: str) -> list[dict[str, object]]:
             2,
             "Pricing rules rely on magic numbers and commented-out dead code instead of named constants.",
             suggestion="Replace sentinel values with named constants and remove stale commented code.",
-            kind="magic_numbers",
-            keywords=["magic number", "constant", "dead code", "naming"],
+            issue_type="magic_numbers",
             tags=["design"],
         )
 
@@ -303,23 +338,11 @@ def _heuristic_findings(diff: str) -> list[dict[str, object]]:
             1,
             "Validation logic is duplicated across functions instead of being shared.",
             suggestion="Extract the repeated checks into a shared helper to keep the rules consistent.",
-            kind="duplicate_code",
-            keywords=["duplicate", "dry", "refactor", "repeated"],
+            issue_type="duplicate_logic",
             tags=["design"],
         )
 
     return findings
-
-
-def _keywords_for_diff(diff: str) -> list[str]:
-    keywords: list[str] = []
-    seen: set[str] = set()
-    for finding in _heuristic_findings(diff):
-        for keyword in finding["keywords"]:
-            if keyword not in seen:
-                seen.add(keyword)
-                keywords.append(keyword)
-    return keywords
 
 
 def _filter_findings(findings: list[dict[str, object]], strategy: str) -> list[dict[str, object]]:
@@ -346,13 +369,15 @@ def _filter_findings(findings: list[dict[str, object]], strategy: str) -> list[d
         ]
     elif strategy == "typescript_idioms":
         filtered = [finding for finding in ordered_findings if "typescript" in finding["tags"]]
+    elif strategy == "initial":
+        filtered = ordered_findings[:2] if len(ordered_findings) > 2 else ordered_findings
     else:
         filtered = ordered_findings[:1] if len(ordered_findings) > 1 else ordered_findings
 
     if filtered:
         return filtered
     if strategy == "initial":
-        return ordered_findings[:1] if len(ordered_findings) > 1 else ordered_findings
+        return ordered_findings[:2] if len(ordered_findings) > 2 else ordered_findings
     return ordered_findings
 
 
@@ -375,7 +400,7 @@ def _render_review(diff: str, strategy: str) -> str:
         )
 
     issue_lines = [
-        f"- [{finding['severity']}] {finding['file']}:{finding['line']} {finding['message']}"
+        f"- [{finding['severity']}] [{finding['type']}] {finding['file']}:{finding['line']} {finding['message']}"
         for finding in findings
     ]
     suggestion_lines = [
@@ -419,10 +444,25 @@ def _mock_critic_invoke(messages: list[object]) -> SimpleNamespace:
     review_match = re.search(r"## Review To Evaluate\s*(.*)$", prompt, re.DOTALL)
     review_text = review_match.group(1).strip() if review_match else prompt
     issues = extract_issues(review_text)
+    expected_issues = [
+        _issue_record(
+            file=str(finding["file"]),
+            issue_type=str(finding["type"]),
+            description=str(finding["message"]),
+        )
+        for finding in _heuristic_findings(diff)
+    ]
+    detected_issues = [
+        _issue_record(
+            file=issue["file"],
+            issue_type=issue["issue_type"],
+            description=issue["message"],
+        )
+        for issue in issues
+    ]
     quality = evaluate_issue_quality(
-        _keywords_for_diff(diff),
-        [issue["message"] for issue in issues],
-        review_text,
+        expected_issues,
+        detected_issues,
     )
     if not diff.strip():
         score = 10.0 if not issues else 2.0
@@ -435,7 +475,7 @@ def _mock_critic_invoke(messages: list[object]) -> SimpleNamespace:
             f"recall={quality['recall']:.2f}, "
             f"false_positives={quality['false_positives']}"
         ),
-        "issues_identified": [issue["message"] for issue in issues],
+        "issues_identified": [issue["issue_type"] for issue in issues],
     }
     return _mock_response(json.dumps(payload))
 
@@ -484,9 +524,10 @@ def _invoke_pipeline(initial_state: dict, use_mock: bool) -> dict:
 def run_scenario(scenario: dict, use_mock: bool = False) -> dict:
     """Run one scenario through the full pipeline."""
     scenario_id = scenario["id"]
+    pr_ref = str(scenario.get("pr_url") or scenario_id)
     print(f"  [{scenario['category']:12s}] {scenario['name'][:55]:<55}", end=" ", flush=True)
 
-    initial = build_initial_state(scenario_id)
+    initial = build_initial_state(pr_ref)
     started_at = time.perf_counter()
     error_msg: str | None = None
     result: dict | None = None
@@ -510,10 +551,10 @@ def run_scenario(scenario: dict, use_mock: bool = False) -> dict:
             recall=0.0,
             f1=0.0,
             false_positives=0,
-            found_issues=[],
+            detected_issues=[],
             matched_expected_issues=[],
             unmatched_expected_issues=scenario["expected_issues"],
-            matched_found_issues=[],
+            matched_detected_issues=[],
             false_positive_issues=[],
             triggered_branch=False,
             n_candidates=0,
@@ -521,6 +562,7 @@ def run_scenario(scenario: dict, use_mock: bool = False) -> dict:
             latency_ms=latency_ms,
             retrieval_sources=[],
             review_text="",
+            repo_signals={},
             error=error_msg or "unknown error",
         )
 
@@ -539,11 +581,17 @@ def run_scenario(scenario: dict, use_mock: bool = False) -> dict:
     review_text = str(selected_candidate.get("review", ""))
     files_changed = list(result.get("pr_metadata", {}).get("files_changed", []))
     issues = extract_issues(review_text, files_changed)
-    found_issue_messages = [issue["message"] for issue in issues]
+    detected_issues = [
+        _issue_record(
+            file=issue["file"],
+            issue_type=issue["issue_type"],
+            description=issue["message"],
+        )
+        for issue in issues
+    ]
     quality = evaluate_issue_quality(
         scenario["expected_issues"],
-        found_issue_messages,
-        review_text,
+        detected_issues,
     )
 
     run = make_run_result(
@@ -556,10 +604,10 @@ def run_scenario(scenario: dict, use_mock: bool = False) -> dict:
         recall=quality["recall"],
         f1=quality["f1"],
         false_positives=quality["false_positives"],
-        found_issues=found_issue_messages,
+        detected_issues=detected_issues,
         matched_expected_issues=quality["matched_expected_issues"],
         unmatched_expected_issues=quality["unmatched_expected_issues"],
-        matched_found_issues=quality["matched_found_issues"],
+        matched_detected_issues=quality["matched_detected_issues"],
         false_positive_issues=quality["false_positive_issues"],
         triggered_branch=bool(result.get("branch_taken", False)),
         n_candidates=len(candidates),
@@ -569,6 +617,7 @@ def run_scenario(scenario: dict, use_mock: bool = False) -> dict:
         review_text=review_text,
         selector_reason=str(result.get("selector_reason", "")),
         branch_improvement=result.get("branch_improvement"),
+        repo_signals=dict(result.get("repo_signals", {})),
     )
 
     branch_delta = (
@@ -599,12 +648,33 @@ def main() -> None:
         help="Use deterministic local mocks for LLM calls while keeping real evaluation metrics.",
     )
     parser.add_argument("--scenario", type=str, default=None)
+    parser.add_argument("--scenario-ids", type=str, default=None)
     parser.add_argument("--categories", type=str, default=None)
     parser.add_argument("--output", type=str, default="evaluation/results.json")
     parser.add_argument("--delay", type=float, default=0.0)
+    parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument("--min-success-rate", type=float, default=None)
+    parser.add_argument("--min-avg-f1", type=float, default=None)
+    parser.add_argument(
+        "--real-world",
+        action="store_true",
+        help="Run the real-world GitHub PR dataset from evaluation/real_world_cases.json.",
+    )
     args = parser.parse_args()
 
-    scenarios = SCENARIOS
+    scenarios = load_real_world_cases() if args.real_world else SCENARIOS
+    if args.real_world and args.output == "evaluation/results.json":
+        args.output = "evaluation/real_world_results.json"
+    if args.scenario_ids:
+        selected_ids = {item.strip() for item in args.scenario_ids.split(",") if item.strip()}
+        scenarios = [
+            scenario
+            for scenario in scenarios
+            if scenario["id"] in selected_ids or str(scenario.get("pr_url", "")) in selected_ids
+        ]
+        if not scenarios:
+            print(f"No scenarios matching explicit ids: {sorted(selected_ids)}")
+            sys.exit(1)
     if args.scenario:
         scenarios = [scenario for scenario in scenarios if args.scenario in scenario["id"]]
         if not scenarios:
@@ -616,6 +686,8 @@ def main() -> None:
         if not scenarios:
             print(f"No scenarios in categories: {allowed}")
             sys.exit(1)
+    if args.limit is not None and args.limit > 0:
+        scenarios = scenarios[: args.limit]
 
     mode = "MOCK" if args.mock else "LIVE (requires GROQ_API_KEY)"
     print(f"\nPR Critic Evaluation -- {mode}")
@@ -642,10 +714,10 @@ def main() -> None:
                 recall=0.0,
                 f1=0.0,
                 false_positives=0,
-                found_issues=[],
+                detected_issues=[],
                 matched_expected_issues=[],
                 unmatched_expected_issues=scenario["expected_issues"],
-                matched_found_issues=[],
+                matched_detected_issues=[],
                 false_positive_issues=[],
                 triggered_branch=False,
                 n_candidates=0,
@@ -653,6 +725,7 @@ def main() -> None:
                 latency_ms=0.0,
                 retrieval_sources=[],
                 review_text="",
+                repo_signals={},
                 error=f"FATAL: {fatal_msg}",
             )
         results.append(result)
@@ -666,6 +739,7 @@ def main() -> None:
         "meta": {
             "run_at": datetime.now(timezone.utc).isoformat(),
             "mode": "mock" if args.mock else "live",
+            "dataset": "real_world" if args.real_world else "curated",
             "total_scenarios": len(scenarios),
             "groq_generation_model": settings.generation_model,
             "groq_reasoning_model": settings.reasoning_model,
@@ -684,6 +758,24 @@ def main() -> None:
     print()
     print(format_summary_table(summary))
     print(f"\nResults saved -> {out_path}")
+
+    if args.min_success_rate is not None:
+        actual_success_rate = float(summary.get("success_rate_pct", 0.0))
+        if actual_success_rate < args.min_success_rate:
+            print(
+                f"Live evaluation failed success-rate gate: "
+                f"{actual_success_rate:.1f}% < {args.min_success_rate:.1f}%"
+            )
+            sys.exit(1)
+
+    if args.min_avg_f1 is not None:
+        actual_avg_f1 = float(summary.get("avg_f1", 0.0))
+        if actual_avg_f1 < args.min_avg_f1:
+            print(
+                f"Live evaluation failed avg-F1 gate: "
+                f"{actual_avg_f1:.3f} < {args.min_avg_f1:.3f}"
+            )
+            sys.exit(1)
 
     if summary.get("failed_runs", 0) > 0 or summary.get("error"):
         sys.exit(1)

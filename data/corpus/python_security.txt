@@ -1,0 +1,9 @@
+Category: security
+SECTION: Password Hashing
+Passwords must not be hashed with MD5 or SHA1. Use password-specific key derivation functions such as Argon2, bcrypt, scrypt, or PBKDF2 with salts and appropriate work factors.
+---
+SECTION: SQL Injection
+SQL queries must bind user-controlled values through parameters. String interpolation, f-strings, and concatenation inside SQL statements are unsafe when input can reach the query.
+---
+SECTION: Exception Handling
+Broad exception handlers and bare except blocks hide production failures. Catch specific exceptions, log failures, and avoid returning generic success when an operation failed.

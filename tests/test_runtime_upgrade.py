@@ -20,6 +20,7 @@ from backend.graph.state import build_initial_state, build_request_context
 from backend.observability.context import get_request_id
 from backend.services.review_runtime import run_review_pipeline_async
 from backend.utils.cache import TTLCache
+from backend.utils.diff import build_llm_diff_packet, chunk_diff_for_review
 
 
 def test_build_initial_state_keeps_request_context():
@@ -35,6 +36,11 @@ def test_build_initial_state_keeps_request_context():
     assert state["request_context"]["request_id"] == "req-123"
     assert state["request_context"]["execution_mode"] == "async_threadpool"
     assert state["scores"] == []
+    assert state["rate_limited"] is False
+    assert state["large_pr_mode"] is False
+    assert state["request_cache_key"] == ""
+    assert state["llm_input_tokens"] == 0
+    assert state["branch_budget_available"] is True
     assert state["trace"] == []
 
 
@@ -113,6 +119,42 @@ def test_ttl_cache_single_flight_computes_once_for_concurrent_requests():
     assert len(results) == 2
     assert sorted(result[1] for result in results) == [False, True]
     assert all(result[0] == {"value": 1} for result in results)
+
+
+def test_chunk_diff_for_review_splits_large_diffs_without_dropping_files():
+    diff = (
+        "diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -0,0 +1,80 @@\n"
+        + "\n".join(f"+line_{index}" for index in range(80))
+        + "\n\ndiff --git a/b.py b/b.py\n--- a/b.py\n+++ b/b.py\n@@ -0,0 +1,80 @@\n"
+        + "\n".join(f"+other_{index}" for index in range(80))
+    )
+
+    chunks = chunk_diff_for_review(diff, max_chars=500)
+
+    assert len(chunks) > 1
+    assert any("a.py" in chunk.included_files for chunk in chunks)
+    assert any("b.py" in chunk.included_files for chunk in chunks)
+    assert all(chunk.content.strip() for chunk in chunks)
+    assert len(chunks) <= 5
+    assert all(len(chunk.content.splitlines()) <= 200 for chunk in chunks)
+
+
+def test_build_llm_diff_packet_keeps_only_top_review_chunks():
+    diff = (
+        "diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-old\n+new\n\n"
+        "diff --git a/backend/auth.py b/backend/auth.py\n--- a/backend/auth.py\n+++ b/backend/auth.py\n@@ -0,0 +1,80 @@\n"
+        + "\n".join(f"+auth_line_{index}" for index in range(80))
+        + "\n\ndiff --git a/backend/db.py b/backend/db.py\n--- a/backend/db.py\n+++ b/backend/db.py\n@@ -0,0 +1,80 @@\n"
+        + "\n".join(f"+db_line_{index}" for index in range(80))
+        + "\n\ndiff --git a/docs/guide.md b/docs/guide.md\n--- a/docs/guide.md\n+++ b/docs/guide.md\n@@ -1 +1 @@\n-a\n+b\n"
+    )
+
+    packet = build_llm_diff_packet(diff)
+
+    assert packet.selected_chunks <= 3
+    assert packet.estimated_tokens <= 900
+    assert "backend/auth.py" in packet.included_files
+    assert "README.md" not in packet.included_files
 
 
 def test_review_endpoint_propagates_request_id_and_returns_new_response_shape():

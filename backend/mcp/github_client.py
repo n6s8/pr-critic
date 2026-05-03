@@ -8,6 +8,7 @@ from dataclasses import dataclass
 import httpx
 
 from backend.config import settings
+from backend.errors import UpstreamFetchError
 from backend.observability.logger import record, log_structured
 from backend.utils.cache import TTLCache, build_cache_key
 from backend.utils.resilience import is_retryable_github_error, retry_call
@@ -176,27 +177,28 @@ def _fetch_files(ref: GHPRRef, token: str | None) -> list[dict]:
 
 from backend.mcp.github_mock import PRData  # noqa: E402
 
-MAX_DIFF_CHARS = 8_000
-
 
 def get_real_pr_data(pr_url: str, token: str | None = None) -> PRData:
     """
     Full fetch pipeline: URL -> meta -> files -> language -> diff.
 
     Raises:
-        ValueError: URL is not a valid GitHub PR URL.
-        httpx.HTTPStatusError: GitHub API returned an error (including 403 rate limit).
+        UpstreamFetchError: GitHub URL is invalid or the upstream request failed.
     """
     ref = parse_github_url(pr_url)
     if ref is None:
-        raise ValueError(f"Not a GitHub PR URL: {pr_url!r}")
+        raise UpstreamFetchError(
+            f"Invalid GitHub pull request URL: {pr_url!r}",
+            status_code=400,
+            code="github_invalid_url",
+        )
 
     token_key = build_cache_key(token or "anonymous")
     cache_key = build_cache_key(pr_url, token_key)
 
     def _load() -> PRData:
         started_at = time.perf_counter()
-        
+
         try:
             meta = _fetch_pr_meta(ref, token)
             files = _fetch_files(ref, token)
@@ -204,33 +206,67 @@ def get_real_pr_data(pr_url: str, token: str | None = None) -> PRData:
             language = detect_language(file_names)
             diff = _fetch_diff(ref, token)
         except httpx.HTTPStatusError as exc:
-            # Handle GitHub rate limit (403) with clear error message
-            if exc.response and exc.response.status_code == 403:
-                remaining = exc.response.headers.get("x-ratelimit-remaining", "0")
-                reset_time = exc.response.headers.get("x-ratelimit-reset", "unknown")
+            response = exc.response
+            status_code = response.status_code if response is not None else 502
+            remaining = response.headers.get("x-ratelimit-remaining", "") if response is not None else ""
+            reset_time = response.headers.get("x-ratelimit-reset", "unknown") if response is not None else "unknown"
+            request_url = str(exc.request.url) if exc.request else "unknown"
+
+            if status_code == 404:
+                raise UpstreamFetchError(
+                    "GitHub pull request not found or not accessible.",
+                    status_code=404,
+                    code="github_pr_not_found",
+                    details={"url": request_url},
+                ) from exc
+
+            if status_code == 403 and remaining == "0":
                 log_structured(
                     "ERROR",
                     "github_rate_limit_exceeded",
                     status_code=403,
-                    url=str(exc.request.url) if exc.request else "unknown",
+                    url=request_url,
                     remaining=remaining,
                     reset_time=reset_time,
                     has_token=bool(token),
                 )
-                raise ValueError(
-                    f"GitHub API rate limit exceeded (403). "
-                    f"Remaining requests: {remaining}. "
-                    f"Please ensure GITHUB_TOKEN is set for higher rate limits."
+                raise UpstreamFetchError(
+                    "GitHub API rate limit exceeded. Please retry later or configure GITHUB_TOKEN.",
+                    status_code=503,
+                    code="github_rate_limited",
+                    details={"url": request_url, "reset_time": reset_time},
                 ) from exc
-            # Re-raise other HTTP errors
-            raise
 
-        if len(diff) > MAX_DIFF_CHARS:
-            omitted = len(diff) - MAX_DIFF_CHARS
-            diff = (
-                diff[:MAX_DIFF_CHARS]
-                + f"\n\n... [diff truncated - {omitted} chars omitted to fit context window] ..."
-            )
+            if status_code in {401, 403}:
+                raise UpstreamFetchError(
+                    "GitHub denied access to this pull request. Check repository visibility and credentials.",
+                    status_code=status_code,
+                    code="github_access_denied",
+                    details={"url": request_url},
+                ) from exc
+
+            if status_code == 422:
+                raise UpstreamFetchError(
+                    "GitHub could not process this pull request request.",
+                    status_code=400,
+                    code="github_invalid_request",
+                    details={"url": request_url},
+                ) from exc
+
+            raise UpstreamFetchError(
+                f"GitHub upstream request failed with status {status_code}.",
+                status_code=502,
+                code="github_upstream_error",
+                details={"url": request_url, "provider_status": status_code},
+            ) from exc
+        except httpx.RequestError as exc:
+            request_url = str(exc.request.url) if exc.request else "unknown"
+            raise UpstreamFetchError(
+                "Unable to reach GitHub to fetch this pull request.",
+                status_code=502,
+                code="github_unreachable",
+                details={"url": request_url},
+            ) from exc
 
         elapsed_ms = (time.perf_counter() - started_at) * 1000
         record(

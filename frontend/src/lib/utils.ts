@@ -22,26 +22,37 @@ export interface PRContext {
 
 const AGENT_ORDER = [
   'fetch_agent',
+  'planner_agent',
   'rag_agent',
   'review_agent',
-  'critic_agent',
+  'critic_initial',
   'router',
   'branch_agent',
+  'critic_branch',
+  'false_positive_guard_agent',
+  'synthesis_agent',
   'selector_agent',
 ]
 
 const AGENT_DESCRIPTIONS: Record<string, string> = {
   fetch_agent: 'Load PR metadata and the raw diff.',
+  planner_agent: 'Choose review focus and expected risk areas.',
   rag_agent: 'Retrieve local guidance for the detected language.',
   review_agent: 'Generate the initial review candidate.',
-  critic_agent: 'Score review candidates and decide whether branching is needed.',
+  critic_initial: 'Score the initial review candidate and decide whether branching is needed.',
   router: 'Record the branch-or-select routing decision.',
   branch_agent: 'Generate alternative review candidates.',
+  critic_branch: 'Score the branch candidates only.',
+  false_positive_guard_agent: 'Remove findings without changed-line evidence.',
+  synthesis_agent: 'Summarize grounded findings and limitations.',
   selector_agent: 'Choose the final candidate.',
 }
 
 const STRATEGY_LABELS: Record<string, string> = {
   initial: 'Balanced Review',
+  large_pr_partial: 'Large PR Partial',
+  fallback_rate_limited: 'Rate Limit Fallback',
+  fallback_unavailable: 'Fallback Review',
   security_focus: 'Security Focus',
   correctness_focus: 'Correctness Focus',
   python_idioms: 'Python Idioms',
@@ -107,6 +118,8 @@ export function getIssueCounts(
 
 export function formatAgentName(agent: string) {
   if (agent === 'router') return 'Router'
+  if (agent === 'critic_initial') return 'Critic Initial'
+  if (agent === 'critic_branch') return 'Critic Branch'
 
   return agent
     .replace(/_agent$/i, '')

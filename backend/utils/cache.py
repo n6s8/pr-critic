@@ -5,11 +5,22 @@ import hashlib
 import threading
 import time
 from dataclasses import dataclass
-from typing import Callable, Generic, TypeVar
+from typing import Callable, Generic, Protocol, TypeVar
 
 from backend.observability.logger import log_structured
 
 T = TypeVar("T")
+
+
+class CacheBackend(Protocol[T]):
+    def get(self, key: str) -> tuple[bool, T | None]:
+        ...
+
+    def set(self, key: str, value: T) -> None:
+        ...
+
+    def get_or_compute(self, key: str, factory: Callable[[], T]) -> tuple[T, bool]:
+        ...
 
 
 @dataclass
@@ -94,3 +105,28 @@ class TTLCache(Generic[T]):
 def build_cache_key(*parts: object) -> str:
     raw = "||".join(str(part) for part in parts)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+class RedisCacheBackend(Generic[T]):
+    """Placeholder interface for a future distributed cache backend."""
+
+    def __init__(self, name: str, ttl_seconds: int, max_size: int = 128) -> None:
+        raise NotImplementedError(
+            "Redis cache backend is not implemented yet. "
+            "Use CACHE_BACKEND=memory until a distributed backend is wired in."
+        )
+
+
+def build_cache_backend(
+    kind: str,
+    *,
+    name: str,
+    ttl_seconds: int,
+    max_size: int = 128,
+) -> CacheBackend[T]:
+    normalized = str(kind or "memory").strip().lower()
+    if normalized == "memory":
+        return TTLCache(name, ttl_seconds, max_size=max_size)
+    if normalized == "redis":
+        return RedisCacheBackend(name, ttl_seconds, max_size=max_size)
+    raise ValueError(f"Unsupported cache backend: {kind}")

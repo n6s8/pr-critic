@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from 'react'
-import { analyzeRP } from '../api/analyze'
+import { analyzeRP, ReviewRequestError } from '../api/analyze'
 import type { AnalyzeResponse, ReviewState } from '../types'
 
 function getInitialExpandedAgents(data: AnalyzeResponse) {
@@ -58,10 +58,24 @@ export function useReviewState() {
       if (requestIdRef.current !== requestId) return
       requestIdRef.current = requestId + 1
 
+      let message = error instanceof Error ? error.message : 'Unable to analyze this PR.'
+      if (
+        error instanceof ReviewRequestError &&
+        (
+          error.code === 'llm_rate_limited' ||
+          error.code === 'rate_limited' ||
+          error.statusCode === 429
+        )
+      ) {
+        message = error.retryAfterSeconds
+          ? `LLM rate limit reached. Retry in about ${Math.ceil(error.retryAfterSeconds)} seconds.`
+          : 'LLM rate limit reached. Please retry shortly.'
+      }
+
       setState(current => ({
         ...current,
         loading: false,
-        error: error instanceof Error ? error.message : 'Unable to analyze this PR.',
+        error: message,
       }))
     }
   }, [])

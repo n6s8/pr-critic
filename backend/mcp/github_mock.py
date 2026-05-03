@@ -199,57 +199,20 @@ def get_pr_data(pr_url: str) -> PRData:
         return evaluation_pr
 
     if pr_url.startswith("https://github.com/") and "/pull/" in pr_url:
-        try:
-            from backend.config import settings
-            from backend.mcp.github_client import get_real_pr_data
+        from backend.config import settings
+        from backend.mcp.github_client import get_real_pr_data
 
-            token = getattr(settings, "github_token", None) or None
+        token = getattr(settings, "github_token", None) or None
+        try:
             return get_real_pr_data(pr_url, token=token)
-        except ValueError as exc:
-            error_msg = str(exc)
-            log_structured(
-                "ERROR",
-                "github_fetch_error",
-                pr_url=pr_url,
-                error_type=type(exc).__name__,
-                error=error_msg,
-                is_rate_limit="rate limit exceeded" in error_msg.lower(),
-            )
-            return PRData(
-                url=pr_url,
-                title="GitHub fetch error",
-                author="system",
-                base_branch="main",
-                head_branch="feature",
-                files_changed=[],
-                language="Unknown",
-                diff=(
-                    "# ERROR: GitHub fetch failed\n"
-                    f"# Reason: {error_msg}\n"
-                    "# Check GITHUB_TOKEN and repository access."
-                ),
-            )
         except Exception as exc:
             log_structured(
                 "ERROR",
-                "github_fetch_fallback",
+                "github_fetch_failed",
                 pr_url=pr_url,
                 error_type=type(exc).__name__,
                 error=str(exc),
             )
-            return PRData(
-                url=pr_url,
-                title="GitHub fetch failed",
-                author="unknown",
-                base_branch="main",
-                head_branch="feature",
-                files_changed=[],
-                language="Unknown",
-                diff=(
-                    "# ERROR: Could not fetch PR from GitHub\n"
-                    f"# Reason: {exc}\n"
-                    "# Check GITHUB_TOKEN in .env and ensure the PR is accessible."
-                ),
-            )
+            raise
 
     return _raw_diff_pr(pr_url)

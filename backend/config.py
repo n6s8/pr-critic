@@ -90,6 +90,10 @@ class Settings(BaseSettings):
     log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
     llm_timeout_seconds: float = Field(default=45.0, validation_alias="LLM_TIMEOUT_SECONDS")
     github_timeout_seconds: float = Field(default=20.0, validation_alias="GITHUB_TIMEOUT_SECONDS")
+    repo_signal_timeout_seconds: float = Field(default=20.0, validation_alias="REPO_SIGNAL_TIMEOUT_SECONDS")
+    mcp_transport: str = Field(default="inprocess", validation_alias="MCP_TRANSPORT")
+    api_key: Optional[str] = Field(default=None, validation_alias="PR_CRITIC_API_KEY")
+    max_review_input_chars: int = Field(default=200_000, validation_alias="MAX_REVIEW_INPUT_CHARS")
 
     external_api_retries: int = Field(default=3, validation_alias="EXTERNAL_API_RETRIES")
     external_api_retry_backoff_seconds: float = Field(
@@ -106,6 +110,7 @@ class Settings(BaseSettings):
 
     pr_cache_ttl_seconds: int = Field(default=120, validation_alias="PR_CACHE_TTL_SECONDS")
     rag_cache_ttl_seconds: int = Field(default=300, validation_alias="RAG_CACHE_TTL_SECONDS")
+    cache_backend: str = Field(default="memory", validation_alias="CACHE_BACKEND")
     cors_allowed_origins_raw: str = Field(
         default=(
             "https://pr-critic.vercel.app,"

@@ -11,6 +11,7 @@ from typing import Any
 
 from backend.config import settings
 from backend.observability.context import get_request_context
+from backend.observability.metrics import record_agent_error, record_agent_run
 
 
 _WRITE_LOCK = Lock()
@@ -39,7 +40,7 @@ class JsonFormatter(logging.Formatter):
         if record.exc_info:
             payload["exception"] = self.formatException(record.exc_info)
 
-        return json.dumps(payload, ensure_ascii=False)
+        return json.dumps(payload, ensure_ascii=False, default=str)
 
 
 def _log_file() -> Path:
@@ -136,10 +137,12 @@ def log_start(agent: str, inputs: dict[str, Any]) -> dict[str, Any]:
 
 
 def log_end(agent: str, outputs: dict[str, Any], duration_ms: float) -> dict[str, Any]:
+    record_agent_run(agent, duration_ms, outputs)
     return record(agent, "end", outputs, duration_ms)
 
 
 def log_error(agent: str, error: str) -> dict[str, Any]:
+    record_agent_error(agent, details={"error": error})
     return record(agent, "error", {"error": error})
 
 

@@ -11,6 +11,31 @@ import type {
 
 const BASE_URL = import.meta.env.VITE_API_URL ?? ''
 
+export class ReviewRequestError extends Error {
+  statusCode: number
+  code: string
+  retryAfterSeconds: number | null
+
+  constructor(
+    message: string,
+    {
+      statusCode,
+      code,
+      retryAfterSeconds = null,
+    }: {
+      statusCode: number
+      code: string
+      retryAfterSeconds?: number | null
+    }
+  ) {
+    super(message)
+    this.name = 'ReviewRequestError'
+    this.statusCode = statusCode
+    this.code = code
+    this.retryAfterSeconds = retryAfterSeconds
+  }
+}
+
 function normalizeSeverity(value: unknown): Severity {
   const normalized = String(value ?? '').toLowerCase()
 
@@ -49,9 +74,12 @@ function mapIssues(raw: unknown): Issue[] {
 
     return {
       severity: normalizeSeverity(item.severity),
+      issue_type: typeof item.issue_type === 'string' ? item.issue_type : 'unknown',
       file: item.file ?? 'unknown',
       line: typeof item.line === 'number' ? item.line : 0,
       message: item.message ?? `Issue ${index + 1}`,
+      code_snippet: typeof item.code_snippet === 'string' ? item.code_snippet : '',
+      source_id: typeof item.source_id === 'string' ? item.source_id : 'diff',
     }
   })
 }
@@ -136,13 +164,34 @@ export async function analyzeRP(prUrl: string): Promise<AnalyzeResponse> {
 
   if (!response.ok) {
     let message = `Review request failed with status ${response.status}`
+    let code = 'review_failed'
+    let retryAfterSeconds: number | null = Number(response.headers.get('Retry-After'))
+    if (Number.isNaN(retryAfterSeconds)) {
+      retryAfterSeconds = null
+    }
 
     if (responseText.trim()) {
       try {
         const parsed = JSON.parse(responseText)
 
+        if (parsed.error && typeof parsed.error.code === 'string') {
+          code = parsed.error.code
+        }
+        const parsedRetryAfter =
+          parsed.error?.details?.retry_after_seconds ??
+          parsed.details?.retry_after_seconds
+        if (
+          retryAfterSeconds === null &&
+          typeof parsedRetryAfter === 'number' &&
+          Number.isFinite(parsedRetryAfter)
+        ) {
+          retryAfterSeconds = parsedRetryAfter
+        }
+
         if (typeof parsed.detail === 'string') {
           message = parsed.detail
+        } else if (parsed.error && typeof parsed.error.message === 'string') {
+          message = parsed.error.message
         } else if (typeof parsed.message === 'string') {
           message = parsed.message
         } else {
@@ -153,7 +202,11 @@ export async function analyzeRP(prUrl: string): Promise<AnalyzeResponse> {
       }
     }
 
-    throw new Error(message)
+    throw new ReviewRequestError(message, {
+      statusCode: response.status,
+      code,
+      retryAfterSeconds,
+    })
   }
 
   const data = responseText.trim() ? JSON.parse(responseText) : {}

@@ -5,9 +5,12 @@ export type DiffFileStatus = 'modified' | 'added' | 'deleted' | 'renamed'
 
 export interface Issue {
   severity: Severity
+  issue_type: string
   file: string
   line: number
   message: string
+  code_snippet?: string
+  source_id?: string
 }
 
 export interface RetrievalHit {

@@ -1,92 +1,126 @@
 """
-evaluation/metrics.py
+Issue-level evaluation metrics for PR Critic.
 
-Pure functions that compute evaluation quality from expected issues and the
-selected review output. No I/O and no LLM calls live here.
+The evaluation compares structured expected issues to structured detected
+issues, then computes precision / recall / F1 over matched issue pairs.
 """
 from __future__ import annotations
 
 import re
 from collections import Counter
-from typing import Any
+from typing import Any, TypedDict
+
+from backend.utils.issues import (
+    classify_issue_type,
+    description_similarity,
+    file_paths_match,
+    normalize_file_path,
+)
 
 
-_NORMALIZE_RE = re.compile(r"[^a-z0-9]+")
+class EvaluationIssue(TypedDict):
+    file: str
+    type: str
+    description: str
 
 
-def _normalize(text: str) -> str:
-    return _NORMALIZE_RE.sub(" ", str(text or "").lower()).strip()
+def _normalize_issue(issue: dict[str, Any]) -> EvaluationIssue:
+    return {
+        "file": normalize_file_path(str(issue.get("file") or "unknown")),
+        "type": classify_issue_type(
+            str(issue.get("description") or issue.get("message") or ""),
+            str(issue.get("type") or issue.get("issue_type") or ""),
+        ),
+        "description": str(issue.get("description") or issue.get("message") or "").strip(),
+    }
 
 
-def _matches_keyword(keyword: str, text: str) -> bool:
-    normalized_keyword = _normalize(keyword)
-    normalized_text = _normalize(text)
-    if not normalized_keyword or not normalized_text:
-        return False
-    return (
-        normalized_keyword in normalized_text
-        or normalized_text in normalized_keyword
-    )
-
-
-def _dedupe_texts(items: list[str]) -> list[str]:
-    unique: list[str] = []
-    seen: set[str] = set()
-    for item in items:
-        cleaned = str(item or "").strip()
-        normalized = _normalize(cleaned)
-        if not normalized or normalized in seen:
+def _dedupe_issues(issues: list[dict[str, Any]]) -> list[EvaluationIssue]:
+    deduped: list[EvaluationIssue] = []
+    seen: set[tuple[str, str, str]] = set()
+    for issue in issues:
+        normalized = _normalize_issue(issue)
+        key = (
+            normalized["file"],
+            normalized["type"],
+            re.sub(r"\s+", " ", normalized["description"].lower()),
+        )
+        if key in seen:
             continue
-        seen.add(normalized)
-        unique.append(cleaned)
-    return unique
+        seen.add(key)
+        deduped.append(normalized)
+    return deduped
+
+
+def _issue_match_score(expected: EvaluationIssue, detected: EvaluationIssue) -> float:
+    if expected["type"] == "unknown" or detected["type"] == "unknown":
+        return 0.0
+    if expected["type"] != detected["type"]:
+        return 0.0
+
+    same_file = file_paths_match(expected["file"], detected["file"])
+    if not same_file and "unknown" not in {expected["file"], detected["file"]}:
+        return 0.0
+
+    similarity = description_similarity(expected["description"], detected["description"])
+    file_score = 1.0 if same_file else 0.35
+    return 0.7 + (0.2 * file_score) + (0.1 * similarity)
+
+
+def _match_issues(
+    expected_issues: list[EvaluationIssue],
+    detected_issues: list[EvaluationIssue],
+) -> list[tuple[int, int, float]]:
+    scored_pairs: list[tuple[int, int, float]] = []
+    for expected_index, expected in enumerate(expected_issues):
+        for detected_index, detected in enumerate(detected_issues):
+            score = _issue_match_score(expected, detected)
+            if score > 0:
+                scored_pairs.append((expected_index, detected_index, score))
+
+    scored_pairs.sort(key=lambda item: (-item[2], item[0], item[1]))
+    matched_expected: set[int] = set()
+    matched_detected: set[int] = set()
+    matches: list[tuple[int, int, float]] = []
+
+    for expected_index, detected_index, score in scored_pairs:
+        if expected_index in matched_expected or detected_index in matched_detected:
+            continue
+        matched_expected.add(expected_index)
+        matched_detected.add(detected_index)
+        matches.append((expected_index, detected_index, score))
+
+    return matches
 
 
 def evaluate_issue_quality(
-    expected_issues: list[str],
-    found_issues: list[str],
-    review_text: str,
+    expected_issues: list[dict[str, Any]],
+    detected_issues: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """
-    Compare the expected scenario issues to the issues found in the final review.
+    expected = _dedupe_issues(expected_issues)
+    detected = _dedupe_issues(detected_issues)
+    matches = _match_issues(expected, detected)
 
-    Recall is measured against the full review text so we capture issue mentions
-    that appear in suggestions or rationale, not only in extracted bullets.
-    Precision and false positives are measured against the structured found issue
-    list because that is what the system explicitly surfaced as findings.
-    """
-    expected = _dedupe_texts(expected_issues)
-    found = _dedupe_texts(found_issues)
-    review_blob = "\n".join([review_text, *found])
+    matched_expected_indexes = {expected_index for expected_index, _, _ in matches}
+    matched_detected_indexes = {detected_index for _, detected_index, _ in matches}
 
-    matched_expected = [
-        issue for issue in expected
-        if _matches_keyword(issue, review_blob)
-    ]
+    matched_expected = [expected[index] for index in sorted(matched_expected_indexes)]
     unmatched_expected = [
-        issue for issue in expected
-        if issue not in matched_expected
+        issue for index, issue in enumerate(expected)
+        if index not in matched_expected_indexes
     ]
-
-    matched_found = [
-        issue for issue in found
-        if any(_matches_keyword(expected_issue, issue) for expected_issue in expected)
-    ]
+    matched_detected = [detected[index] for index in sorted(matched_detected_indexes)]
     false_positive_issues = [
-        issue for issue in found
-        if issue not in matched_found
+        issue for index, issue in enumerate(detected)
+        if index not in matched_detected_indexes
     ]
 
-    if not found:
+    if not detected:
         precision = 1.0 if not expected else 0.0
     else:
-        precision = len(matched_found) / len(found)
+        precision = len(matches) / len(detected)
 
-    if not expected:
-        recall = 1.0
-    else:
-        recall = len(matched_expected) / len(expected)
-
+    recall = 1.0 if not expected else len(matches) / len(expected)
     if precision == 0.0 and recall == 0.0:
         f1 = 0.0
     else:
@@ -98,12 +132,11 @@ def evaluate_issue_quality(
         "f1": round(f1, 4),
         "matched_expected_issues": matched_expected,
         "unmatched_expected_issues": unmatched_expected,
-        "matched_found_issues": matched_found,
+        "matched_detected_issues": matched_detected,
         "false_positive_issues": false_positive_issues,
-        "matched_expected_count": len(matched_expected),
-        "matched_found_count": len(matched_found),
+        "matched_issue_count": len(matches),
         "false_positives": len(false_positive_issues),
-        "found_issue_count": len(found),
+        "detected_issue_count": len(detected),
         "expected_issue_count": len(expected),
     }
 
@@ -112,17 +145,17 @@ def make_run_result(
     scenario_id: str,
     scenario_name: str,
     category: str,
-    expected_issues: list[str],
+    expected_issues: list[dict[str, Any]],
     review_score: float,
     precision: float,
     recall: float,
     f1: float,
     false_positives: int,
-    found_issues: list[str],
-    matched_expected_issues: list[str],
-    unmatched_expected_issues: list[str],
-    matched_found_issues: list[str],
-    false_positive_issues: list[str],
+    detected_issues: list[dict[str, Any]],
+    matched_expected_issues: list[dict[str, Any]],
+    unmatched_expected_issues: list[dict[str, Any]],
+    matched_detected_issues: list[dict[str, Any]],
+    false_positive_issues: list[dict[str, Any]],
     triggered_branch: bool,
     n_candidates: int,
     selected_strategy: str,
@@ -131,24 +164,24 @@ def make_run_result(
     review_text: str,
     selector_reason: str = "",
     branch_improvement: float | None = None,
+    repo_signals: dict[str, Any] | None = None,
     error: str | None = None,
 ) -> dict[str, Any]:
-    """Build a structured dict for one pipeline run."""
     return {
         "scenario_id": scenario_id,
         "scenario_name": scenario_name,
         "category": category,
-        "expected_issues": expected_issues,
+        "expected_issues": _dedupe_issues(expected_issues),
         "review_score": round(review_score, 2),
         "precision": round(precision, 4),
         "recall": round(recall, 4),
         "f1": round(f1, 4),
         "false_positives": int(false_positives),
-        "found_issues": found_issues,
-        "matched_expected_issues": matched_expected_issues,
-        "unmatched_expected_issues": unmatched_expected_issues,
-        "matched_found_issues": matched_found_issues,
-        "false_positive_issues": false_positive_issues,
+        "detected_issues": _dedupe_issues(detected_issues),
+        "matched_expected_issues": _dedupe_issues(matched_expected_issues),
+        "unmatched_expected_issues": _dedupe_issues(unmatched_expected_issues),
+        "matched_detected_issues": _dedupe_issues(matched_detected_issues),
+        "false_positive_issues": _dedupe_issues(false_positive_issues),
         "triggered_branch": triggered_branch,
         "n_candidates": n_candidates,
         "selected_strategy": selected_strategy,
@@ -156,18 +189,13 @@ def make_run_result(
         "branch_improvement": round(branch_improvement, 2) if branch_improvement is not None else None,
         "latency_ms": round(latency_ms, 1),
         "retrieval_sources": retrieval_sources,
+        "repo_signals": repo_signals or {},
         "review_preview": review_text[:400].replace("\n", " ") if review_text else "",
         "error": error,
     }
 
 
 def compute_summary(results: list[dict[str, Any]]) -> dict[str, Any]:
-    """
-    Compute aggregate quality metrics from run results.
-
-    Failed runs still affect success rate, but they are excluded from precision /
-    recall / latency aggregates because no review quality could be measured.
-    """
     successful = [result for result in results if result["error"] is None]
     total = len(results)
     successful_count = len(successful)
@@ -223,10 +251,7 @@ def compute_summary(results: list[dict[str, Any]]) -> dict[str, Any]:
             "avg_precision": round(sum(values["precision"]) / len(values["precision"]), 4),
             "avg_recall": round(sum(values["recall"]) / len(values["recall"]), 4),
             "avg_f1": round(sum(values["f1"]) / len(values["f1"]), 4),
-            "avg_false_positives": round(
-                sum(values["false_positives"]) / len(values["false_positives"]),
-                2,
-            ),
+            "avg_false_positives": round(sum(values["false_positives"]) / len(values["false_positives"]), 2),
         }
         for category, values in category_metrics.items()
     }
@@ -246,11 +271,7 @@ def compute_summary(results: list[dict[str, Any]]) -> dict[str, Any]:
         "zero_false_positive_runs": sum(1 for value in false_positive_counts if value == 0),
         "branching_rate_pct": round(len(branched) / successful_count * 100, 1),
         "branched_count": len(branched),
-        "avg_branch_improvement": (
-            round(sum(branch_improvements) / len(branch_improvements), 2)
-            if branch_improvements
-            else None
-        ),
+        "avg_branch_improvement": round(sum(branch_improvements) / len(branch_improvements), 2) if branch_improvements else None,
         "avg_latency_ms": round(sum(latencies) / successful_count, 1),
         "min_latency_ms": round(min(latencies), 1),
         "max_latency_ms": round(max(latencies), 1),
@@ -262,7 +283,6 @@ def compute_summary(results: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def format_summary_table(summary: dict[str, Any]) -> str:
-    """Return a plain-text summary table for stdout and CI logs."""
     lines = [
         "=" * 56,
         "  PR CRITIC - EVALUATION SUMMARY",

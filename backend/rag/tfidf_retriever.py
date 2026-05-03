@@ -75,11 +75,17 @@ def _parse_file(path: Path) -> list[dict]:
 
 def build_corpus(corpus_dir: str = "data/corpus", force_rebuild: bool = False) -> int:
     _INDEX_PATH.parent.mkdir(parents=True, exist_ok=True)
+    corpus_files = sorted(Path(corpus_dir).glob("*.txt"))
     if not force_rebuild and _INDEX_PATH.exists():
+        index_mtime = _INDEX_PATH.stat().st_mtime
+        newest_corpus_mtime = max((path.stat().st_mtime for path in corpus_files), default=0)
+        if index_mtime >= newest_corpus_mtime:
+            return len(json.loads(_INDEX_PATH.read_text(encoding="utf-8"))["docs"])
+    if not force_rebuild and _INDEX_PATH.exists() and not corpus_files:
         return len(json.loads(_INDEX_PATH.read_text(encoding="utf-8"))["docs"])
 
     all_docs: list[dict] = []
-    for corpus_file in sorted(Path(corpus_dir).glob("*.txt")):
+    for corpus_file in corpus_files:
         all_docs.extend(_parse_file(corpus_file))
 
     if not all_docs:

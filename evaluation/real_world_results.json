@@ -1,0 +1,496 @@
+{
+  "meta": {
+    "run_at": "2026-04-25T05:44:02.519793+00:00",
+    "mode": "mock",
+    "dataset": "real_world",
+    "total_scenarios": 8,
+    "groq_generation_model": "llama-3.1-8b-instant",
+    "groq_reasoning_model": "llama-3.1-8b-instant"
+  },
+  "summary": {
+    "total_scenarios": 8,
+    "successful_runs": 8,
+    "failed_runs": 0,
+    "success_rate_pct": 100.0,
+    "avg_precision": 1.0,
+    "avg_recall": 1.0,
+    "avg_f1": 1.0,
+    "avg_review_score": 9.59,
+    "total_false_positives": 0,
+    "avg_false_positives": 0.0,
+    "perfect_recall_runs": 8,
+    "zero_false_positive_runs": 8,
+    "branching_rate_pct": 12.5,
+    "branched_count": 1,
+    "avg_branch_improvement": 0.0,
+    "avg_latency_ms": 5393.5,
+    "min_latency_ms": 3448.1,
+    "max_latency_ms": 11080.4,
+    "quality_distribution": {
+      "0.75-1.00 (good)": 8
+    },
+    "strategy_distribution": {
+      "initial": 8
+    },
+    "most_common_strategy": "initial",
+    "category_metrics": {
+      "small": {
+        "avg_precision": 1.0,
+        "avg_recall": 1.0,
+        "avg_f1": 1.0,
+        "avg_false_positives": 0.0
+      },
+      "backend_python": {
+        "avg_precision": 1.0,
+        "avg_recall": 1.0,
+        "avg_f1": 1.0,
+        "avg_false_positives": 0.0
+      },
+      "backend_node": {
+        "avg_precision": 1.0,
+        "avg_recall": 1.0,
+        "avg_f1": 1.0,
+        "avg_false_positives": 0.0
+      },
+      "security": {
+        "avg_precision": 1.0,
+        "avg_recall": 1.0,
+        "avg_f1": 1.0,
+        "avg_false_positives": 0.0
+      },
+      "issue_security": {
+        "avg_precision": 1.0,
+        "avg_recall": 1.0,
+        "avg_f1": 1.0,
+        "avg_false_positives": 0.0
+      },
+      "issue_validation": {
+        "avg_precision": 1.0,
+        "avg_recall": 1.0,
+        "avg_f1": 1.0,
+        "avg_false_positives": 0.0
+      },
+      "issue_error_handling": {
+        "avg_precision": 1.0,
+        "avg_recall": 1.0,
+        "avg_f1": 1.0,
+        "avg_false_positives": 0.0
+      }
+    }
+  },
+  "results": [
+    {
+      "scenario_id": "https://github.com/supabase/auth/pull/2480",
+      "scenario_name": "Small documentation/config PR clarifying that the rate-limit header must come from a trusted upstream proxy.",
+      "category": "small",
+      "expected_issues": [],
+      "review_score": 10.0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0,
+      "false_positives": 0,
+      "detected_issues": [],
+      "matched_expected_issues": [],
+      "unmatched_expected_issues": [],
+      "matched_detected_issues": [],
+      "false_positive_issues": [],
+      "triggered_branch": false,
+      "n_candidates": 1,
+      "selected_strategy": "initial",
+      "selector_reason": "Selected the only candidate returned by the pipeline.",
+      "branch_improvement": null,
+      "latency_ms": 11080.4,
+      "retrieval_sources": [
+        "owasp_top10",
+        "react_security"
+      ],
+      "repo_signals": {
+        "checkout_status": "ready",
+        "lint_status": "not_applicable",
+        "file_types": [
+          "md",
+          "env"
+        ],
+        "lint_issue_count": 0,
+        "lint_issues": [],
+        "summary": "Changed file types: md, env."
+      },
+      "review_preview": "## Summary The visible diff is small and I do not see a concrete defect in the changed lines.  ## Issues Found None.  ## Suggestions Keep the review scoped to the current change and add tests if behavior changed.  ## Verdict APPROVE No actionable issue is visible in the provided diff.",
+      "error": null
+    },
+    {
+      "scenario_id": "https://github.com/fastapi/fastapi-cli/pull/182",
+      "scenario_name": "Python backend CLI PR making Rich logging conditional on whether stdout is attached to a real terminal.",
+      "category": "backend_python",
+      "expected_issues": [],
+      "review_score": 10.0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0,
+      "false_positives": 0,
+      "detected_issues": [],
+      "matched_expected_issues": [],
+      "unmatched_expected_issues": [],
+      "matched_detected_issues": [],
+      "false_positive_issues": [],
+      "triggered_branch": false,
+      "n_candidates": 1,
+      "selected_strategy": "initial",
+      "selector_reason": "Selected the only candidate returned by the pipeline.",
+      "branch_improvement": null,
+      "latency_ms": 4163.5,
+      "retrieval_sources": [
+        "pep8"
+      ],
+      "repo_signals": {
+        "checkout_status": "ready",
+        "lint_status": "clean",
+        "file_types": [
+          "py"
+        ],
+        "lint_issue_count": 0,
+        "lint_issues": [],
+        "summary": "Changed file types: py. flake8 unavailable for Python signals."
+      },
+      "review_preview": "## Summary The visible diff is small and I do not see a concrete defect in the changed lines.  ## Issues Found None.  ## Suggestions Keep the review scoped to the current change and add tests if behavior changed.  ## Verdict APPROVE No actionable issue is visible in the provided diff.",
+      "error": null
+    },
+    {
+      "scenario_id": "https://github.com/fastapi/fastapi/pull/14400",
+      "scenario_name": "FastAPI backend PR changing malformed JSON handling from validation-style 422 responses to explicit 400 malformed-request responses.",
+      "category": "backend_python",
+      "expected_issues": [],
+      "review_score": 10.0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0,
+      "false_positives": 0,
+      "detected_issues": [],
+      "matched_expected_issues": [],
+      "unmatched_expected_issues": [],
+      "matched_detected_issues": [],
+      "false_positive_issues": [],
+      "triggered_branch": false,
+      "n_candidates": 1,
+      "selected_strategy": "initial",
+      "selector_reason": "Selected the only candidate returned by the pipeline.",
+      "branch_improvement": null,
+      "latency_ms": 4572.6,
+      "retrieval_sources": [
+        "pep8"
+      ],
+      "repo_signals": {
+        "checkout_status": "ready",
+        "lint_status": "clean",
+        "file_types": [
+          "py"
+        ],
+        "lint_issue_count": 0,
+        "lint_issues": [],
+        "summary": "Changed file types: py. flake8 unavailable for Python signals."
+      },
+      "review_preview": "## Summary The visible diff is small and I do not see a concrete defect in the changed lines.  ## Issues Found None.  ## Suggestions Keep the review scoped to the current change and add tests if behavior changed.  ## Verdict APPROVE No actionable issue is visible in the provided diff.",
+      "error": null
+    },
+    {
+      "scenario_id": "https://github.com/expressjs/express/pull/6944",
+      "scenario_name": "Node backend PR improving invalid status-code error handling and adding regression tests for BigInt and object edge cases.",
+      "category": "backend_node",
+      "expected_issues": [],
+      "review_score": 10.0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0,
+      "false_positives": 0,
+      "detected_issues": [],
+      "matched_expected_issues": [],
+      "unmatched_expected_issues": [],
+      "matched_detected_issues": [],
+      "false_positive_issues": [],
+      "triggered_branch": false,
+      "n_candidates": 1,
+      "selected_strategy": "initial",
+      "selector_reason": "Selected the only candidate returned by the pipeline.",
+      "branch_improvement": null,
+      "latency_ms": 8054.7,
+      "retrieval_sources": [
+        "clean_code"
+      ],
+      "repo_signals": {
+        "checkout_status": "ready",
+        "lint_status": "clean",
+        "file_types": [
+          "js"
+        ],
+        "lint_issue_count": 0,
+        "lint_issues": [],
+        "summary": "Changed file types: js. eslint status: clean (0 issue(s))."
+      },
+      "review_preview": "## Summary The visible diff is small and I do not see a concrete defect in the changed lines.  ## Issues Found None.  ## Suggestions Keep the review scoped to the current change and add tests if behavior changed.  ## Verdict APPROVE No actionable issue is visible in the provided diff.",
+      "error": null
+    },
+    {
+      "scenario_id": "https://github.com/supabase/auth/pull/2479",
+      "scenario_name": "Security-oriented backend PR tightening same-origin redirect validation and rejecting non-localhost port mismatches.",
+      "category": "security",
+      "expected_issues": [],
+      "review_score": 10.0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0,
+      "false_positives": 0,
+      "detected_issues": [],
+      "matched_expected_issues": [],
+      "unmatched_expected_issues": [],
+      "matched_detected_issues": [],
+      "false_positive_issues": [],
+      "triggered_branch": false,
+      "n_candidates": 1,
+      "selected_strategy": "initial",
+      "selector_reason": "Selected the only candidate returned by the pipeline.",
+      "branch_improvement": null,
+      "latency_ms": 4310.3,
+      "retrieval_sources": [
+        "react_security"
+      ],
+      "repo_signals": {
+        "checkout_status": "ready",
+        "lint_status": "not_applicable",
+        "file_types": [
+          "go"
+        ],
+        "lint_issue_count": 0,
+        "lint_issues": [],
+        "summary": "Changed file types: go."
+      },
+      "review_preview": "## Summary The visible diff is small and I do not see a concrete defect in the changed lines.  ## Issues Found None.  ## Suggestions Keep the review scoped to the current change and add tests if behavior changed.  ## Verdict APPROVE No actionable issue is visible in the provided diff.",
+      "error": null
+    },
+    {
+      "scenario_id": "https://github.com/ishi-gupta/vuln-test-suite/pull/59",
+      "scenario_name": "Security PR that still leaves MD5-based password hashing in the changed line, so review should catch weak password hashing.",
+      "category": "issue_security",
+      "expected_issues": [
+        {
+          "file": "vulnerable_code/weak_crypto.py",
+          "type": "weak_password_hash",
+          "description": "The changed password hashing helper still uses MD5, even with usedforsecurity=False."
+        }
+      ],
+      "review_score": 10.0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0,
+      "false_positives": 0,
+      "detected_issues": [
+        {
+          "file": "vulnerable_code/weak_crypto.py",
+          "type": "weak_password_hash",
+          "description": "MD5 is not appropriate for password hashing; use a password-specific KDF such as bcrypt or Argon2."
+        }
+      ],
+      "matched_expected_issues": [
+        {
+          "file": "vulnerable_code/weak_crypto.py",
+          "type": "weak_password_hash",
+          "description": "The changed password hashing helper still uses MD5, even with usedforsecurity=False."
+        }
+      ],
+      "unmatched_expected_issues": [],
+      "matched_detected_issues": [
+        {
+          "file": "vulnerable_code/weak_crypto.py",
+          "type": "weak_password_hash",
+          "description": "MD5 is not appropriate for password hashing; use a password-specific KDF such as bcrypt or Argon2."
+        }
+      ],
+      "false_positive_issues": [],
+      "triggered_branch": false,
+      "n_candidates": 1,
+      "selected_strategy": "initial",
+      "selector_reason": "Selected the only candidate returned by the pipeline.",
+      "branch_improvement": null,
+      "latency_ms": 3480.2,
+      "retrieval_sources": [
+        "owasp_top10",
+        "pep8"
+      ],
+      "repo_signals": {
+        "checkout_status": "ready",
+        "lint_status": "clean",
+        "file_types": [
+          "py"
+        ],
+        "lint_issue_count": 0,
+        "lint_issues": [],
+        "summary": "Changed file types: py. flake8 unavailable for Python signals."
+      },
+      "review_preview": "## Summary This change introduces concrete risks in the modified code.  ## Issues Found - [CRITICAL] [weak_password_hash] vulnerable_code/weak_crypto.py:16 MD5 is not appropriate for password hashing; use a password-specific KDF such as bcrypt or Argon2.  ## Suggestions - Replace MD5 with bcrypt or Argon2 and store a salted hash.  ## Verdict REQUEST_CHANGES The diff contains actionable issues that",
+      "error": null
+    },
+    {
+      "scenario_id": "https://github.com/nisarg-vibhakar-ead/pr-review-playground/pull/1",
+      "scenario_name": "Login/routing PR with an explicit missing-validation TODO and an obfuscated JavaScript payload appended to a route module.",
+      "category": "issue_validation",
+      "expected_issues": [
+        {
+          "file": "src/login/login.js",
+          "type": "missing_validation",
+          "description": "The login module is introduced with a TODO for proper validation instead of validating inputs."
+        },
+        {
+          "file": "src/routes/userRoutes.js",
+          "type": "obfuscated_code",
+          "description": "The route module appends heavily obfuscated JavaScript that mutates globals and dynamically exposes require."
+        }
+      ],
+      "review_score": 6.7,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0,
+      "false_positives": 0,
+      "detected_issues": [
+        {
+          "file": "src/routes/userRoutes.js",
+          "type": "obfuscated_code",
+          "description": "Obfuscated JavaScript mutates globals and dynamically exposes require."
+        },
+        {
+          "file": "src/login/login.js",
+          "type": "missing_validation",
+          "description": "Input handling is introduced with validation left as a TODO."
+        }
+      ],
+      "matched_expected_issues": [
+        {
+          "file": "src/login/login.js",
+          "type": "missing_validation",
+          "description": "The login module is introduced with a TODO for proper validation instead of validating inputs."
+        },
+        {
+          "file": "src/routes/userRoutes.js",
+          "type": "obfuscated_code",
+          "description": "The route module appends heavily obfuscated JavaScript that mutates globals and dynamically exposes require."
+        }
+      ],
+      "unmatched_expected_issues": [],
+      "matched_detected_issues": [
+        {
+          "file": "src/routes/userRoutes.js",
+          "type": "obfuscated_code",
+          "description": "Obfuscated JavaScript mutates globals and dynamically exposes require."
+        },
+        {
+          "file": "src/login/login.js",
+          "type": "missing_validation",
+          "description": "Input handling is introduced with validation left as a TODO."
+        }
+      ],
+      "false_positive_issues": [],
+      "triggered_branch": true,
+      "n_candidates": 3,
+      "selected_strategy": "initial",
+      "selector_reason": "Selected initial because it remained the strongest candidate at 6.7. Selected initial because it had the highest critic score (6.7).",
+      "branch_improvement": 0.0,
+      "latency_ms": 4038.0,
+      "retrieval_sources": [
+        "react_security",
+        "typescript_best_practices"
+      ],
+      "repo_signals": {
+        "checkout_status": "ready",
+        "lint_status": "clean",
+        "file_types": [
+          "js"
+        ],
+        "lint_issue_count": 0,
+        "lint_issues": [],
+        "summary": "Changed file types: js. eslint unavailable for Node/TS signals."
+      },
+      "review_preview": "## Summary This change introduces concrete risks in the modified code.  ## Issues Found - [CRITICAL] [obfuscated_code] src/routes/userRoutes.js:5 Obfuscated JavaScript mutates globals and dynamically exposes require. - [MAJOR] [missing_validation] src/login/login.js:1 Input handling is introduced with validation left as a TODO.  ## Suggestions - Remove the obfuscated payload and replace it with re",
+      "error": null
+    },
+    {
+      "scenario_id": "https://github.com/ZaidBuilds/Hey-Jarvis/pull/143",
+      "scenario_name": "Python assistant PR that replaces bare except blocks with broad Exception handlers while still swallowing failures with generic prints or speech.",
+      "category": "issue_error_handling",
+      "expected_issues": [
+        {
+          "file": "engine/command.py",
+          "type": "broad_exception",
+          "description": "The command dispatcher catches broad Exception and only prints a generic error, hiding the real failure path."
+        },
+        {
+          "file": "engine/features.py",
+          "type": "broad_exception",
+          "description": "Feature handlers catch broad Exception and continue with generic messages instead of handling specific failures."
+        }
+      ],
+      "review_score": 10.0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0,
+      "false_positives": 0,
+      "detected_issues": [
+        {
+          "file": "engine/features.py",
+          "type": "broad_exception",
+          "description": "Broad exception handling silently hides real failures."
+        },
+        {
+          "file": "engine/command.py",
+          "type": "broad_exception",
+          "description": "Broad exception handling silently hides real failures."
+        }
+      ],
+      "matched_expected_issues": [
+        {
+          "file": "engine/command.py",
+          "type": "broad_exception",
+          "description": "The command dispatcher catches broad Exception and only prints a generic error, hiding the real failure path."
+        },
+        {
+          "file": "engine/features.py",
+          "type": "broad_exception",
+          "description": "Feature handlers catch broad Exception and continue with generic messages instead of handling specific failures."
+        }
+      ],
+      "unmatched_expected_issues": [],
+      "matched_detected_issues": [
+        {
+          "file": "engine/features.py",
+          "type": "broad_exception",
+          "description": "Broad exception handling silently hides real failures."
+        },
+        {
+          "file": "engine/command.py",
+          "type": "broad_exception",
+          "description": "Broad exception handling silently hides real failures."
+        }
+      ],
+      "false_positive_issues": [],
+      "triggered_branch": false,
+      "n_candidates": 1,
+      "selected_strategy": "initial",
+      "selector_reason": "Selected the only candidate returned by the pipeline.",
+      "branch_improvement": null,
+      "latency_ms": 3448.1,
+      "retrieval_sources": [
+        "pep8",
+        "review_examples"
+      ],
+      "repo_signals": {
+        "checkout_status": "ready",
+        "lint_status": "clean",
+        "file_types": [
+          "py"
+        ],
+        "lint_issue_count": 0,
+        "lint_issues": [],
+        "summary": "Changed file types: py. flake8 unavailable for Python signals."
+      },
+      "review_preview": "## Summary This change introduces concrete risks in the modified code.  ## Issues Found - [MAJOR] [broad_exception] engine/features.py:72 Broad exception handling silently hides real failures. - [MAJOR] [broad_exception] engine/command.py:103 Broad exception handling silently hides real failures.  ## Suggestions - Catch specific exception types and assert or log failures instead of passing. - Catc",
+      "error": null
+    }
+  ]
+}

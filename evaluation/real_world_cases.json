@@ -1,0 +1,78 @@
+[
+  {
+    "pr_url": "https://github.com/supabase/auth/pull/2480",
+    "category": "small",
+    "description": "Small documentation/config PR clarifying that the rate-limit header must come from a trusted upstream proxy.",
+    "expected_issues": []
+  },
+  {
+    "pr_url": "https://github.com/fastapi/fastapi-cli/pull/182",
+    "category": "backend_python",
+    "description": "Python backend CLI PR making Rich logging conditional on whether stdout is attached to a real terminal.",
+    "expected_issues": []
+  },
+  {
+    "pr_url": "https://github.com/fastapi/fastapi/pull/14400",
+    "category": "backend_python",
+    "description": "FastAPI backend PR changing malformed JSON handling from validation-style 422 responses to explicit 400 malformed-request responses.",
+    "expected_issues": []
+  },
+  {
+    "pr_url": "https://github.com/expressjs/express/pull/6944",
+    "category": "backend_node",
+    "description": "Node backend PR improving invalid status-code error handling and adding regression tests for BigInt and object edge cases.",
+    "expected_issues": []
+  },
+  {
+    "pr_url": "https://github.com/supabase/auth/pull/2479",
+    "category": "security",
+    "description": "Security-oriented backend PR tightening same-origin redirect validation and rejecting non-localhost port mismatches.",
+    "expected_issues": []
+  },
+  {
+    "pr_url": "https://github.com/ishi-gupta/vuln-test-suite/pull/59",
+    "category": "issue_security",
+    "description": "Security PR that still leaves MD5-based password hashing in the changed line, so review should catch weak password hashing.",
+    "expected_issues": [
+      {
+        "file": "vulnerable_code/weak_crypto.py",
+        "type": "weak_password_hash",
+        "description": "The changed password hashing helper still uses MD5, even with usedforsecurity=False."
+      }
+    ]
+  },
+  {
+    "pr_url": "https://github.com/nisarg-vibhakar-ead/pr-review-playground/pull/1",
+    "category": "issue_validation",
+    "description": "Login/routing PR with an explicit missing-validation TODO and an obfuscated JavaScript payload appended to a route module.",
+    "expected_issues": [
+      {
+        "file": "src/login/login.js",
+        "type": "missing_validation",
+        "description": "The login module is introduced with a TODO for proper validation instead of validating inputs."
+      },
+      {
+        "file": "src/routes/userRoutes.js",
+        "type": "obfuscated_code",
+        "description": "The route module appends heavily obfuscated JavaScript that mutates globals and dynamically exposes require."
+      }
+    ]
+  },
+  {
+    "pr_url": "https://github.com/ZaidBuilds/Hey-Jarvis/pull/143",
+    "category": "issue_error_handling",
+    "description": "Python assistant PR that replaces bare except blocks with broad Exception handlers while still swallowing failures with generic prints or speech.",
+    "expected_issues": [
+      {
+        "file": "engine/command.py",
+        "type": "broad_exception",
+        "description": "The command dispatcher catches broad Exception and only prints a generic error, hiding the real failure path."
+      },
+      {
+        "file": "engine/features.py",
+        "type": "broad_exception",
+        "description": "Feature handlers catch broad Exception and continue with generic messages instead of handling specific failures."
+      }
+    ]
+  }
+]

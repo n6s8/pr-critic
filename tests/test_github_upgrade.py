@@ -10,11 +10,13 @@ from datetime import datetime, timezone
 from unittest.mock import patch
 
 import httpx
+import pytest
 
 ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, ROOT)
 os.environ.setdefault("GROQ_API_KEY", "test_key")
 
+from backend.errors import UpstreamFetchError
 from backend.graph.state import build_initial_state
 
 
@@ -66,13 +68,15 @@ class TestMockRouting:
         assert "SELECT * FROM orders" in pr.diff
         assert pr.language == "Python"
 
-    def test_github_fetch_error_returns_error_pr(self):
+    def test_github_fetch_error_propagates(self):
         from backend.mcp.github_mock import get_pr_data
 
-        with patch("backend.mcp.github_client.get_real_pr_data", side_effect=Exception("404 Not Found")):
-            pr = get_pr_data("https://github.com/owner/repo/pull/99999")
-            assert pr.diff.startswith("# ERROR:")
-            assert "404 Not Found" in pr.diff
+        with patch(
+            "backend.mcp.github_client.get_real_pr_data",
+            side_effect=UpstreamFetchError("Not found", status_code=404, code="github_pr_not_found"),
+        ):
+            with pytest.raises(UpstreamFetchError):
+                get_pr_data("https://github.com/owner/repo/pull/99999")
 
 
 class TestLanguageAwareRAG:
@@ -122,18 +126,28 @@ class TestIssueExtractor:
 
         review = """
 ## Issues Found
-- [CRITICAL] src/auth.py:42 SQL injection via f-string
-- [MAJOR] src/auth.py:43 Hardcoded secret
+- [CRITICAL] [sql_injection] src/auth.py:42 SQL injection via f-string
+- [MAJOR] [hardcoded_secret] src/auth.py:43 Hardcoded secret
 """
         issues = extract_issues(review)
         assert len(issues) == 2
         assert issues[0]["severity"] == "critical"
+        assert issues[0]["issue_type"] == "sql_injection"
         assert issues[1]["severity"] == "warning"
 
-    def test_uses_file_hint_when_missing_file(self):
+    def test_missing_file_falls_back_to_unknown_when_not_inferred(self):
         from backend.api.issue_extractor import extract_issues
 
-        issues = extract_issues("- [MINOR] Fix naming", files_changed=["utils.py"])
+        issues = extract_issues("- [MINOR] [unknown] Fix naming", files_changed=["utils.py", "helpers.py"])
+        assert issues[0]["file"] == "unknown"
+
+    def test_infers_file_from_message_when_unique(self):
+        from backend.api.issue_extractor import extract_issues
+
+        issues = extract_issues(
+            "- [CRITICAL] [sql_injection] utils.py builds SQL with interpolation",
+            files_changed=["utils.py", "helpers.py"],
+        )
         assert issues[0]["file"] == "utils.py"
 
 
@@ -166,7 +180,7 @@ class TestReviewEndpointContract:
                     {
                         "id": "candidate-0",
                         "strategy": "initial",
-                        "review": "## Issues Found\n- [MINOR] app.py:1 Missing type hints",
+                        "review": "## Issues Found\n- [MINOR] [missing_type_hints] app.py:1 Missing type hints",
                     }
                 ],
                 "scores": [
@@ -206,16 +220,37 @@ class TestReviewEndpointContract:
         assert payload["selected_review"]["strategy"] == "initial"
         assert payload["retrieval"][0]["source"] == "pep8"
         assert payload["trace"][0]["status"] == "completed"
+        assert payload["issues"][0]["issue_type"] == "missing_type_hints"
 
 
 class TestErrorHandling:
-    def test_fetch_agent_handles_error_diff_gracefully(self):
+    def test_fetch_agent_propagates_upstream_errors(self):
         from backend.agents.fetch_agent import fetch_agent
 
         state = {
             **build_initial_state("https://github.com/owner/repo/pull/1"),
         }
-        with patch("backend.mcp.github_client.get_real_pr_data", side_effect=Exception("rate limit exceeded")):
-            result = fetch_agent(state)
-        assert "pr_diff" in result
-        assert "pr_metadata" in result
+        with patch(
+            "backend.mcp.github_client.get_real_pr_data",
+            side_effect=UpstreamFetchError("rate limit exceeded", status_code=503, code="github_rate_limited"),
+        ):
+            with pytest.raises(UpstreamFetchError):
+                fetch_agent(state)
+
+    def test_review_endpoint_returns_http_error_for_fetch_failure(self):
+        from backend.api.main import app
+
+        async def exercise():
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+                return await client.post("/review", json={"pr_url": "https://github.com/owner/repo/pull/1"})
+
+        with patch(
+            "backend.api.main.run_review_pipeline_async",
+            side_effect=UpstreamFetchError("GitHub pull request not found or not accessible.", status_code=404, code="github_pr_not_found"),
+        ):
+            response = asyncio.run(exercise())
+
+        assert response.status_code == 404
+        payload = response.json()
+        assert "not found" in payload["detail"].lower()

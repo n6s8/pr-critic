@@ -13,6 +13,7 @@ from backend.agents.critic_agent import _parse, critic_agent
 from backend.agents.fetch_agent import fetch_agent
 from backend.agents.rag_agent import rag_agent
 from backend.agents.selector_agent import selector_agent
+from backend.api.issue_extractor import extract_issues
 from backend.graph.state import build_initial_state
 from backend.graph.workflow import build_graph, compiled_graph
 from backend.mcp.github_mock import MOCK_PRS, get_pr_data
@@ -32,8 +33,8 @@ def _review_resp() -> SimpleNamespace:
     return _resp(
         "## Summary\nThis PR has concrete security issues.\n\n"
         "## Issues Found\n"
-        "- [CRITICAL] auth.py:5 SQL injection via interpolated input\n"
-        "- [CRITICAL] auth.py:10 MD5 used for password hashing\n\n"
+        "- [CRITICAL] [sql_injection] auth.py:5 SQL injection via interpolated input\n"
+        "- [CRITICAL] [weak_password_hash] auth.py:10 MD5 used for password hashing\n\n"
         "## Suggestions\n- Use parameterized queries.\n- Replace MD5 with bcrypt.\n\n"
         "## Verdict\nREQUEST_CHANGES\nThe visible diff is not safe to merge."
     )
@@ -85,6 +86,36 @@ class TestRagAgent:
         assert result["retrieval_sources"]
         assert result["retrieval_hits"]
 
+    def test_compacts_retrieval_hits_for_prompt_budget(self):
+        from backend.agents.rag_agent import _build_compact_context
+
+        context, hits = _build_compact_context(
+            [
+                {
+                    "source": "owasp",
+                    "section": "A03",
+                    "text": "A" * 300,
+                    "relevance": 0.9,
+                },
+                {
+                    "source": "pep8",
+                    "section": "Typing",
+                    "text": "B" * 300,
+                    "relevance": 0.8,
+                },
+                {
+                    "source": "extra",
+                    "section": "Ignored",
+                    "text": "C" * 300,
+                    "relevance": 0.7,
+                },
+            ]
+        )
+
+        assert len(hits) == 2
+        assert all(len(hit["snippet"]) <= 180 for hit in hits)
+        assert "extra" not in context
+
 
 class TestCriticParsing:
     def test_valid_json(self):
@@ -131,6 +162,107 @@ class TestCriticAgent:
         assert result["scores"][1]["score"] == 8.5
         assert result["branch_taken"] is True
 
+    @patch("backend.agents.critic_agent._llm")
+    def test_large_pr_mode_skips_branching_even_with_low_score(self, mock_llm):
+        mock_llm.invoke.return_value = _resp(
+            '{"score": 2.0, "rationale": "Low confidence", "issues_identified": ["one"]}'
+        )
+
+        state = _state(
+            pr_diff="diff --git a/a.py b/a.py\n@@ -0,0 +1 @@\n+print('x')",
+            large_pr_mode=True,
+            candidates=[
+                {"id": "candidate-0", "strategy": "initial", "review": "first"},
+            ],
+            scores=[],
+        )
+        result = critic_agent(state)
+
+        assert result["branch_taken"] is False
+        assert result["branch_skipped_reason"] == "large_pr_mode"
+
+    def test_large_pr_partial_candidate_is_scored_without_llm(self):
+        state = _state(
+            pr_diff="diff --git a/a.py b/a.py\n@@ -0,0 +1 @@\n+print('x')",
+            large_pr_mode=True,
+            candidates=[
+                {
+                    "id": "large-pr-partial-0",
+                    "strategy": "large_pr_partial",
+                    "review": "## Summary\nPartial large PR analysis.\n\n## Issues Found\nNone.",
+                },
+            ],
+            scores=[],
+        )
+
+        with patch("backend.agents.critic_agent.invoke_llm") as mock_invoke:
+            result = critic_agent(state)
+
+        mock_invoke.assert_not_called()
+        assert result["scores"][0]["score"] == 6.0
+        assert result["scores"][0]["strategy"] == "large_pr_partial"
+        assert result["branch_taken"] is False
+        assert result["branch_skipped_reason"] == "large_pr_mode"
+
+    @patch("backend.agents.critic_agent._llm")
+    def test_token_budget_skips_branching_even_with_low_score(self, mock_llm):
+        mock_llm.invoke.return_value = _resp(
+            '{"score": 2.0, "rationale": "Low confidence", "issues_identified": ["one"]}'
+        )
+
+        state = _state(
+            pr_diff="diff --git a/a.py b/a.py\n@@ -0,0 +1 @@\n+print('x')",
+            branch_budget_available=False,
+            llm_input_tokens=1700,
+            candidates=[
+                {"id": "candidate-0", "strategy": "initial", "review": "first"},
+            ],
+            scores=[],
+        )
+        result = critic_agent(state)
+
+        assert result["branch_taken"] is False
+        assert result["branch_skipped_reason"] == "token_budget"
+
+    @patch("backend.agents.critic_agent.build_reasoning_diff_packet")
+    @patch("backend.agents.critic_agent.invoke_llm")
+    def test_critic_uses_filtered_diff_packet(self, mock_invoke_llm, mock_build_packet):
+        captured: dict[str, str] = {}
+
+        def fake_invoke(_llm, messages, *, agent):
+            captured["prompt"] = messages[-1].content
+            return _resp('{"score": 8.0, "rationale": "Focused", "issues_identified": []}')
+
+        mock_invoke_llm.side_effect = fake_invoke
+        mock_build_packet.return_value = SimpleNamespace(
+            content="FILTERED_DIFF_PACKET",
+            included_files=["backend/auth.py"],
+            selected_chunks=1,
+            omitted_chunks=3,
+            estimated_tokens=120,
+        )
+        diff = (
+            "diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -0,0 +1,20 @@\n"
+            + "\n".join(f"+docs_line_{index}" for index in range(20))
+            + "\n\ndiff --git a/docs/guide.md b/docs/guide.md\n--- a/docs/guide.md\n+++ b/docs/guide.md\n@@ -0,0 +1,20 @@\n"
+            + "\n".join(f"+guide_line_{index}" for index in range(20))
+            + "\n\ndiff --git a/config/settings.json b/config/settings.json\n--- a/config/settings.json\n+++ b/config/settings.json\n@@ -0,0 +1,20 @@\n"
+            + "\n".join(f"+json_line_{index}" for index in range(20))
+            + "\n\ndiff --git a/backend/auth.py b/backend/auth.py\n--- a/backend/auth.py\n+++ b/backend/auth.py\n@@ -0,0 +1,20 @@\n"
+            + "\n".join(f"+auth_line_{index}" for index in range(20))
+        )
+        state = _state(
+            pr_diff=diff,
+            candidates=[{"id": "candidate-0", "strategy": "initial", "review": "review"}],
+            scores=[],
+        )
+
+        critic_agent(state)
+
+        mock_build_packet.assert_called_once()
+        assert "FILTERED_DIFF_PACKET" in captured["prompt"]
+        assert "README.md" not in captured["prompt"]
+
 
 class TestSelectorAgent:
     @patch("backend.agents.selector_agent._rerank", side_effect=ValueError("boom"))
@@ -163,6 +295,105 @@ class TestSelectorAgent:
         assert result["selected_index"] == 1
         assert "highest" in result["selector_reason"].lower()
         assert result["branch_improvement"] is None
+
+    @patch("backend.agents.selector_agent._rerank")
+    def test_rate_limited_selector_skips_rerank(self, mock_rerank):
+        result = selector_agent(
+            _state(
+                rate_limited=True,
+                pr_diff="diff --git a/a.py b/a.py\n@@ -0,0 +1 @@\n+print('x')",
+                candidates=[
+                    {"id": "candidate-0", "strategy": "initial", "review": "first"},
+                    {"id": "candidate-1", "strategy": "security_focus", "review": "second"},
+                ],
+                scores=[
+                    {
+                        "candidate_index": 0,
+                        "strategy": "initial",
+                        "score": 3.0,
+                        "rationale": "weak",
+                        "issues_identified": [],
+                    },
+                    {
+                        "candidate_index": 1,
+                        "strategy": "security_focus",
+                        "score": 9.0,
+                        "rationale": "strong",
+                        "issues_identified": [],
+                    },
+                ],
+            )
+        )
+
+        mock_rerank.assert_not_called()
+        assert result["selected_index"] == 1
+        assert result["rate_limited"] is True
+
+    @patch("backend.agents.selector_agent.build_reasoning_diff_packet")
+    @patch("backend.agents.selector_agent.invoke_llm")
+    def test_selector_uses_filtered_diff_packet(self, mock_invoke_llm, mock_build_packet):
+        captured: dict[str, str] = {}
+
+        def fake_invoke(_llm, messages, *, agent):
+            captured["prompt"] = messages[-1].content
+            return _resp('{"best_index": 0, "rationale": "Best"}')
+
+        mock_invoke_llm.side_effect = fake_invoke
+        mock_build_packet.return_value = SimpleNamespace(
+            content="FILTERED_SELECTOR_PACKET",
+            included_files=["backend/server.ts"],
+            selected_chunks=1,
+            omitted_chunks=3,
+            estimated_tokens=100,
+        )
+        diff = (
+            "diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -0,0 +1,20 @@\n"
+            + "\n".join(f"+docs_line_{index}" for index in range(20))
+            + "\n\ndiff --git a/docs/notes.md b/docs/notes.md\n--- a/docs/notes.md\n+++ b/docs/notes.md\n@@ -0,0 +1,20 @@\n"
+            + "\n".join(f"+notes_line_{index}" for index in range(20))
+            + "\n\ndiff --git a/config/app.json b/config/app.json\n--- a/config/app.json\n+++ b/config/app.json\n@@ -0,0 +1,20 @@\n"
+            + "\n".join(f"+json_line_{index}" for index in range(20))
+            + "\n\ndiff --git a/backend/server.ts b/backend/server.ts\n--- a/backend/server.ts\n+++ b/backend/server.ts\n@@ -0,0 +1,20 @@\n"
+            + "\n".join(f"+server_line_{index}" for index in range(20))
+        )
+        selector_agent(
+            _state(
+                pr_diff=diff,
+                candidates=[
+                    {"id": "candidate-0", "strategy": "initial", "review": "first"},
+                    {"id": "candidate-1", "strategy": "security_focus", "review": "second"},
+                ],
+                scores=[
+                    {
+                        "candidate_index": 0,
+                        "strategy": "initial",
+                        "score": 8.0,
+                        "rationale": "strong",
+                        "issues_identified": [],
+                    },
+                    {
+                        "candidate_index": 1,
+                        "strategy": "security_focus",
+                        "score": 7.5,
+                        "rationale": "good",
+                        "issues_identified": [],
+                    },
+                ],
+            )
+        )
+
+        mock_build_packet.assert_called_once()
+        assert "FILTERED_SELECTOR_PACKET" in captured["prompt"]
+        assert "README.md" not in captured["prompt"]
+
+
+class TestIssueExtraction:
+    def test_extracts_line_number_from_inline_line_hint(self):
+        issues = extract_issues(
+            "## Issues Found\n- [MAJOR] [type_safety] backend/server.ts line 42 The handler accepts overly broad input."
+        )
+
+        assert issues[0]["line"] == 42
 
 
 class TestGraphStructure:
@@ -197,6 +428,7 @@ class TestFullPipelineMocked:
         assert len(result["scores"]) == 1
         assert result["branch_taken"] is False
         assert result["selected_index"] == 0
+        assert any(entry["agent"] == "critic_initial" for entry in result["trace"])
 
     @patch("backend.agents.review_agent._llm")
     @patch("backend.agents.critic_agent._llm")
@@ -213,13 +445,13 @@ class TestFullPipelineMocked:
         mock_branch.invoke.side_effect = [
             _resp(
                 "## Summary\nSecurity pass.\n\n## Issues Found\n"
-                "- [CRITICAL] auth.py:5 SQL injection via interpolated input\n\n"
+                "- [CRITICAL] [sql_injection] auth.py:5 SQL injection via interpolated input\n\n"
                 "## Suggestions\n- Parameterize the query.\n\n"
                 "## Verdict\nREQUEST_CHANGES\nSecurity issue remains."
             ),
             _resp(
                 "## Summary\nPython pass.\n\n## Issues Found\n"
-                "- [MAJOR] auth.py:10 MD5 used for password hashing\n\n"
+                "- [MAJOR] [weak_password_hash] auth.py:10 MD5 used for password hashing\n\n"
                 "## Suggestions\n- Use bcrypt.\n\n"
                 "## Verdict\nREQUEST_CHANGES\nCrypto issue remains."
             ),
@@ -242,6 +474,7 @@ class TestFullPipelineMocked:
             entry["agent"] == "router" and entry["data"].get("decision") == "branch"
             for entry in result["trace"]
         )
+        assert any(entry["agent"] == "critic_branch" for entry in result["trace"])
 
 
 class TestNegativeCases:
